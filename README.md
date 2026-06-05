@@ -16,9 +16,11 @@ Frontend React untuk aplikasi manajemen tugas mahasiswa berdasarkan desain UI/UX
 | `/` | Landing |
 | `/login` | Login |
 | `/register` | Register |
-| `/beranda` | Dashboard (Beranda) |
-| `/daftar-tugas` | Kanban Daftar Tugas + modal detail |
-| `/kalender` | Kalender & daftar tugas harian |
+| `/dashboard` | Dashboard utama |
+| `/mytask` | Kanban My Task |
+| `/projects` | Workspace Projects |
+| `/calendar` | Kalender & daftar tugas harian |
+| `/partner` | Partner hub |
 | `/profile` | Profil pengguna |
 
 ## Menjalankan
