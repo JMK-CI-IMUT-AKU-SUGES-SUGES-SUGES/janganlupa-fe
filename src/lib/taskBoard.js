@@ -148,6 +148,7 @@ export function createTaskDraft(overrides = {}) {
     progress: nextProgress,
     label: 'Frontend',
     priority: 'Sedang',
+    assigneeId: '',
     assignee: 'Narendra',
     dueDate: new Date().toISOString().slice(0, 10),
     scope: 'personal',

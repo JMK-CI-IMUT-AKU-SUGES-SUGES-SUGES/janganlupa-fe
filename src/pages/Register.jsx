@@ -1,15 +1,58 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff, Mail } from 'lucide-react'
 import Logo from '../components/Logo'
 import WaveBackground from '../components/WaveBackground'
+import { useAuth } from '../context/AuthContext'
+import { registerSchema, formatZodErrors } from '../lib/validation'
 
 export default function Register() {
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirm, setShowConfirm] = useState(false)
+  
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const { register } = useAuth()
+  const navigate = useNavigate()
+
+  const handleRegister = async (e) => {
+    e.preventDefault()
+    setError('')
+
+    const result = registerSchema.safeParse({ name, email, password, confirmPassword })
+    if (!result.success) {
+      setError(formatZodErrors(result.error))
+      return
+    }
+
+    setLoading(true)
+
+    // Generate slug from name
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '') + '-' + Math.floor(Math.random() * 1000)
+
+    try {
+      await register(name, slug, email, password)
+      navigate('/dashboard')
+    } catch (err) {
+      if (err.response?.data && typeof err.response.data === 'object') {
+        const errors = Object.values(err.response.data).flat().join(', ')
+        setError(errors || 'Registrasi gagal.')
+      } else {
+        setError('Registrasi gagal. Silakan coba lagi.')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
 
   return (
-    <WaveBackground className="flex items-center justify-center py-12">
+    <WaveBackground className="flex min-h-screen items-center justify-center py-12">
       <div className="mx-auto w-full max-w-lg px-4">
         <div className="overflow-hidden rounded-[28px] border border-white/70 bg-white/90 shadow-2xl shadow-brand-navy/10 backdrop-blur-xl">
           <div className="bg-[linear-gradient(135deg,#001529_0%,#0052cc_62%,#14b8a6_100%)] px-8 py-7 text-white">
@@ -28,7 +71,13 @@ export default function Register() {
           </div>
 
           <div className="p-8">
-            <form className="space-y-4" onSubmit={(e) => e.preventDefault()}>
+            {error && (
+              <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-600">
+                {error}
+              </div>
+            )}
+            
+            <form className="space-y-4" onSubmit={handleRegister}>
               <div>
                 <label className="mb-1.5 block text-sm font-semibold text-brand-navy">
                   Username
@@ -36,6 +85,8 @@ export default function Register() {
                 <input
                   type="text"
                   placeholder="Nama Kamu"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
                   className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-brand-navy focus:ring-4 focus:ring-brand/10"
                 />
               </div>
@@ -48,6 +99,8 @@ export default function Register() {
                   <input
                     type="email"
                     placeholder="Email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 pr-10 text-sm text-slate-900 outline-none transition focus:border-brand-navy focus:ring-4 focus:ring-brand/10"
                   />
                   <Mail className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -62,6 +115,8 @@ export default function Register() {
                   <input
                     type={showPassword ? 'text' : 'password'}
                     placeholder="Password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
                     className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 pr-10 text-sm text-slate-900 outline-none transition focus:border-brand-navy focus:ring-4 focus:ring-brand/10"
                   />
                   <button
@@ -86,6 +141,8 @@ export default function Register() {
                   <input
                     type={showConfirm ? 'text' : 'password'}
                     placeholder="Tulis ulang Password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
                     className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 pr-10 text-sm text-slate-900 outline-none transition focus:border-brand-navy focus:ring-4 focus:ring-brand/10"
                   />
                   <button
@@ -102,12 +159,13 @@ export default function Register() {
                 </div>
               </div>
 
-              <Link
-                to="/dashboard"
-                className="block w-full rounded-xl bg-brand-navy py-3 text-center text-sm font-bold text-white shadow-lg shadow-brand-navy/15 transition-all hover:-translate-y-0.5 hover:bg-brand"
+              <button
+                type="submit"
+                disabled={loading}
+                className="block w-full rounded-xl bg-brand-navy py-3 text-center text-sm font-bold text-white shadow-lg shadow-brand-navy/15 transition-all hover:-translate-y-0.5 hover:bg-brand disabled:opacity-70 disabled:hover:translate-y-0"
               >
-                Register
-              </Link>
+                {loading ? 'Registering...' : 'Register'}
+              </button>
             </form>
 
             <p className="mt-6 text-center text-sm text-muted">

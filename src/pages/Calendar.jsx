@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, CircleAlert, Clock3, ListChecks } from 'lucide-react'
 import AppLayout from '../layouts/AppLayout'
 import FilterDropdown from '../components/FilterDropdown'
-import TaskDrawer from '../components/TaskDrawer'
-import useWorkspace from '../hooks/useWorkspace'
+import { useAuth } from '../context/AuthContext'
+import api from '../lib/api'
+import { normalizeTask, normalizeProject, denormalizeTask } from '../lib/projectUtils'
 import {
   formatTaskDate,
   taskPriorityStyles,
@@ -12,6 +13,9 @@ import {
   taskStatusMeta,
   taskStatusOptions,
 } from '../lib/taskBoard'
+import { taskSchema, formatZodErrors } from '../lib/validation'
+
+const TaskDrawer = lazy(() => import('../components/TaskDrawer'))
 
 const weekDays = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab']
 
@@ -73,32 +77,60 @@ function getNextUpcomingTasks(tasks, selectedDate) {
 
 export default function Calendar() {
   const location = useLocation()
-  const { currentUser, deleteTask, projects, tasks, updateTask } = useWorkspace()
+  const { user } = useAuth()
   const todayKey = toDateKey(new Date())
   const initialSelectedDate = location.state?.selectedDate ?? todayKey
+
+  const [tasks, setTasks] = useState([])
+  const [projects, setProjects] = useState([])
+  const [loading, setLoading] = useState(true)
   const [viewDate, setViewDate] = useState(parseDateKey(initialSelectedDate))
   const [selectedDate, setSelectedDate] = useState(initialSelectedDate)
   const [scopeFilter, setScopeFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [error, setError] = useState('')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [activeTaskId, setActiveTaskId] = useState(null)
 
   const year = viewDate.getFullYear()
   const month = viewDate.getMonth()
 
-  const myTasks = useMemo(
-    () => tasks.filter((task) => task.assignee === currentUser.name),
-    [currentUser.name, tasks]
-  )
+  const fetchData = useCallback(async () => {
+    try {
+      setLoading(true)
+      const [tasksRes, projectsRes] = await Promise.all([
+        api.get('/tasks'),
+        api.get('/projects'),
+      ])
+
+      const normalizedTasks = (tasksRes.data.data.tasks || []).map((t) =>
+        normalizeTask(t, user.name)
+      )
+      const normalizedProjects = (projectsRes.data.data.projects || []).map((p) =>
+        normalizeProject(p)
+      )
+
+      setTasks(normalizedTasks)
+      setProjects(normalizedProjects)
+    } catch (error) {
+      console.error('Failed to fetch data:', error)
+    } finally {
+      setLoading(false)
+    }
+  }, [user.name])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
 
   const filteredTasks = useMemo(
     () =>
-      myTasks.filter((task) => {
+      tasks.filter((task) => {
         const matchesScope = scopeFilter === 'all' || task.scope === scopeFilter
         const matchesStatus = statusFilter === 'all' || task.status === statusFilter
         return matchesScope && matchesStatus
       }),
-    [myTasks, scopeFilter, statusFilter]
+    [tasks, scopeFilter, statusFilter]
   )
 
   const tasksByDate = useMemo(() => {
@@ -106,7 +138,6 @@ export default function Calendar() {
 
     filteredTasks.forEach((task) => {
       if (!task.dueDate) return
-
       const taskBucket = groupedTasks.get(task.dueDate) ?? []
       taskBucket.push(task)
       groupedTasks.set(task.dueDate, taskBucket)
@@ -155,8 +186,8 @@ export default function Calendar() {
   )
 
   const activeTask = useMemo(
-    () => myTasks.find((task) => task.id === activeTaskId) ?? null,
-    [activeTaskId, myTasks]
+    () => tasks.find((task) => task.id === activeTaskId) ?? null,
+    [activeTaskId, tasks]
   )
 
   const changeMonth = useCallback(
@@ -188,19 +219,49 @@ export default function Calendar() {
     setDrawerOpen(false)
   }, [])
 
-  const saveTask = useCallback(
-    (task) => {
-      updateTask({
-        ...task,
-        assignee: currentUser.name,
-      })
+  const saveTask = async (taskData) => {
+    setError('')
+
+    const result = taskSchema.safeParse(taskData)
+    if (!result.success) {
+      setError(formatZodErrors(result.error))
+      return
+    }
+
+    try {
+      const payload = denormalizeTask(taskData)
+      await api.put(`/tasks/${taskData.id}`, payload)
+      fetchData()
       setDrawerOpen(false)
-    },
-    [currentUser.name, updateTask]
-  )
+    } catch (err) {
+      setError(err.response?.data?.meta?.message || 'Gagal menyimpan task')
+    }
+  }
+
+  const deleteTask = async (taskId) => {
+    setError('')
+
+    if (!taskId) {
+      setError('ID task tidak ditemukan')
+      return
+    }
+
+    try {
+      await api.delete(`/tasks/${taskId}`)
+      fetchData()
+      setDrawerOpen(false)
+    } catch (err) {
+      setError(err.response?.data?.meta?.message || 'Gagal menghapus task')
+    }
+  }
 
   return (
     <AppLayout active="Calendar">
+      {error ? (
+        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-600">
+          {error}
+        </div>
+      ) : null}
       <section className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-sm font-bold uppercase tracking-[0.2em] text-brand">
@@ -212,15 +273,23 @@ export default function Calendar() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">
-            {monthTaskCount} task bulan ini
-          </span>
-          <span className="rounded-full bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600">
-            {overdueTaskCount} lewat deadline
-          </span>
-          <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700">
-            {completedTaskCount} selesai
-          </span>
+          {loading ? (
+            <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">
+              Loading...
+            </span>
+          ) : (
+            <>
+              <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">
+                {monthTaskCount} task bulan ini
+              </span>
+              <span className="rounded-full bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600">
+                {overdueTaskCount} lewat deadline
+              </span>
+              <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700">
+                {completedTaskCount} selesai
+              </span>
+            </>
+          )}
         </div>
       </section>
 
@@ -474,19 +543,23 @@ export default function Calendar() {
         </div>
       </section>
 
-      <TaskDrawer
-        key={activeTask?.id ?? 'calendar-task'}
-        open={drawerOpen}
-        mode="edit"
-        task={activeTask}
-        onClose={closeDrawer}
-        onSave={saveTask}
-        onDelete={deleteTask}
-        projects={projects}
-        scopeMode={activeTask?.scope === 'project' ? 'projectOnly' : 'personalOnly'}
-        lockAssignee
-        lockedProjectId={activeTask?.projectId ?? ''}
-      />
+      {drawerOpen ? (
+        <Suspense fallback={null}>
+          <TaskDrawer
+            key={activeTask?.id ?? 'calendar-task'}
+            open={drawerOpen}
+            mode="edit"
+            task={activeTask}
+            onClose={closeDrawer}
+            onSave={saveTask}
+            onDelete={deleteTask}
+            projects={projects}
+            scopeMode={activeTask?.scope === 'project' ? 'projectOnly' : 'personalOnly'}
+            lockAssignee
+            lockedProjectId={activeTask?.projectId ?? ''}
+          />
+        </Suspense>
+      ) : null}
     </AppLayout>
   )
 }

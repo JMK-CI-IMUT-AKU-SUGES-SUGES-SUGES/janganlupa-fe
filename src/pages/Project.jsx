@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { ArrowRight, FolderOpen, Plus, Search, Users } from 'lucide-react'
 import AppLayout from '../layouts/AppLayout'
 import FilterDropdown from '../components/FilterDropdown'
-import ProjectEditorDrawer from '../components/ProjectEditorDrawer'
-import useWorkspace from '../hooks/useWorkspace'
+import { useAuth } from '../context/AuthContext'
+import api from '../lib/api'
 import {
   getInitials,
   getProjectPeople,
@@ -12,6 +13,9 @@ import {
   getProjectTaskStats,
   projectRoleMeta,
 } from '../lib/projectUtils'
+import { projectSchema, formatZodErrors } from '../lib/validation'
+
+const ProjectEditorDrawer = lazy(() => import('../components/ProjectEditorDrawer'))
 
 const roleFilterOptions = [
   { value: 'all', label: 'Semua akses' },
@@ -22,14 +26,13 @@ const roleFilterOptions = [
 
 function createProjectDraft(ownerName) {
   return {
-    id: `project-${Date.now()}`,
     name: '',
     description: '',
     owner: ownerName,
     admins: [],
     members: [],
     progress: 0,
-    deadline: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+    deadline_date: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
       .toISOString()
       .slice(0, 10),
     links: [],
@@ -39,16 +42,58 @@ function createProjectDraft(ownerName) {
 
 export default function Project() {
   const navigate = useNavigate()
-  const { currentUser, projects, tasks, updateProject } = useWorkspace()
+  const { user } = useAuth()
+  
+  const [projects, setProjects] = useState([])
+  const [tasks, setTasks] = useState([])
+  const [loading, setLoading] = useState(true)
+
   const [searchQuery, setSearchQuery] = useState('')
   const [roleFilter, setRoleFilter] = useState('all')
   const [drawerOpen, setDrawerOpen] = useState(false)
+
+  const fetchProjects = useCallback(async () => {
+    try {
+      setLoading(true)
+      const [projectsRes, tasksRes] = await Promise.all([
+        api.get('/projects'),
+        api.get('/tasks')
+      ])
+
+      const normalizedProjects = projectsRes.data.data.projects.map(p => {
+        const users = p.users || []
+        return {
+          ...p,
+          owner: users.find(u => u.pivot.role === 'owner')?.name || '',
+          admins: users.filter(u => u.pivot.role === 'admin').map(u => u.name),
+          members: users.filter(u => u.pivot.role === 'member').map(u => u.name),
+        }
+      })
+
+      const normalizedTasks = tasksRes.data.data.tasks.map(t => ({
+        ...t,
+        scope: t.project_id ? 'project' : 'personal',
+        projectId: t.project_id || '',
+      }))
+
+      setProjects(normalizedProjects)
+      setTasks(normalizedTasks)
+    } catch (error) {
+      console.error('Gagal mengambil data project:', error)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchProjects()
+  }, [fetchProjects])
 
   const filteredProjects = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase()
 
     return projects.filter((project) => {
-      const role = getProjectRole(project, currentUser.name)
+      const role = getProjectRole(project, user?.name)
       const searchableText = [
         project.name,
         project.description,
@@ -64,14 +109,32 @@ export default function Project() {
 
       return matchesQuery && matchesRole
     })
-  }, [currentUser.name, projects, roleFilter, searchQuery])
+  }, [user?.name, projects, roleFilter, searchQuery])
 
   const totalProjectTasks = tasks.filter((task) => task.scope === 'project').length
 
-  const handleCreateProject = (projectInput) => {
-    updateProject(projectInput)
-    setDrawerOpen(false)
-    navigate(`/projects/${projectInput.id}`)
+  const handleCreateProject = async (projectInput) => {
+    const result = projectSchema.safeParse(projectInput)
+    if (!result.success) {
+      toast.error(formatZodErrors(result.error))
+      return
+    }
+
+    try {
+      const payload = {
+        name: projectInput.name,
+        description: projectInput.description,
+        deadline_date: projectInput.deadline || projectInput.deadline_date,
+        links: projectInput.links || []
+      }
+      
+      const res = await api.post('/projects', payload)
+      toast.success('Project berhasil dibuat')
+      setDrawerOpen(false)
+      navigate(`/projects/${res.data.data.project.id}`)
+    } catch (error) {
+      toast.error(error.response?.data?.meta?.message || 'Gagal membuat project')
+    }
   }
 
   return (
@@ -87,12 +150,20 @@ export default function Project() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">
-            {projects.length} project aktif
-          </span>
-          <span className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-brand">
-            {totalProjectTasks} task project
-          </span>
+          {loading ? (
+            <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">
+              Loading...
+            </span>
+          ) : (
+            <>
+              <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">
+                {projects.length} project aktif
+              </span>
+              <span className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-brand">
+                {totalProjectTasks} task project
+              </span>
+            </>
+          )}
         </div>
       </section>
 
@@ -139,7 +210,7 @@ export default function Project() {
 
       <section className="grid gap-5 xl:grid-cols-2">
         {filteredProjects.map((project) => {
-          const role = getProjectRole(project, currentUser.name)
+          const role = getProjectRole(project, user?.name)
           const roleMeta = projectRoleMeta[role]
           const people = getProjectPeople(project)
           const taskStats = getProjectTaskStats(tasks, project.id, project.progress)
@@ -220,15 +291,19 @@ export default function Project() {
         })}
       </section>
 
-      <ProjectEditorDrawer
-        key={`create-project-${drawerOpen ? 'open' : 'closed'}`}
-        mode="create"
-        open={drawerOpen}
-        project={createProjectDraft(currentUser.name)}
-        currentUserName={currentUser.name}
-        onClose={() => setDrawerOpen(false)}
-        onSave={handleCreateProject}
-      />
+      {drawerOpen ? (
+        <Suspense fallback={null}>
+          <ProjectEditorDrawer
+            key={`create-project-${drawerOpen ? 'open' : 'closed'}`}
+            mode="create"
+            open={drawerOpen}
+            project={createProjectDraft(user?.name)}
+            currentUserName={user?.name}
+            onClose={() => setDrawerOpen(false)}
+            onSave={handleCreateProject}
+          />
+        </Suspense>
+      ) : null}
     </AppLayout>
   )
 }

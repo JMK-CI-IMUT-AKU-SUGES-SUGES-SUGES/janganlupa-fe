@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   ArrowRight,
   ArrowUp,
@@ -18,6 +18,9 @@ import {
 import Footer from '../components/Footer'
 import Logo from '../components/Logo'
 import heroArt from '../assets/hero.png'
+import { useAuth } from '../context/AuthContext'
+import { preloadRoute } from '../lib/routePreload'
+import { getAvatarDataUri } from '../lib/projectUtils'
 
 const landingNavLinks = [
   { label: 'Fitur', href: '#fitur' },
@@ -57,19 +60,19 @@ const testimonials = [
     name: 'Samuel Christian',
     role: 'Freelancer',
     text: 'Sangat terbantu untuk memantau deadline klien dan pekerjaan harian yang sering datang bersamaan. Tampilannya bersih dan mudah dipakai!',
-    avatar: 'https://api.dicebear.com/7.x/adventurer/svg?seed=Samuel'
+    avatar: getAvatarDataUri('Samuel Christian'),
   },
   {
     name: 'Lefi Herdiansyah',
     role: 'Tim Operasional',
     text: 'Dulu sering lupa follow-up kecil yang ternyata penting. Dengan kalender JanganLupa, saya bisa menata jadwal dan prioritas lebih rapi.',
-    avatar: 'https://api.dicebear.com/7.x/adventurer/svg?seed=Lefi'
+    avatar: getAvatarDataUri('Lefi Herdiansyah'),
   },
   {
     name: 'Abby Abigail',
     role: 'Content Creator',
     text: 'Checklist kepuasan psikologisnya nyata! Setiap kali mengubah tugas menjadi Selesai, rasanya beban pikiran langsung berkurang drastis.',
-    avatar: 'https://api.dicebear.com/7.x/adventurer/svg?seed=Abby'
+    avatar: getAvatarDataUri('Abby Abigail'),
   }
 ]
 
@@ -93,9 +96,20 @@ const faqs = [
 ]
 
 export default function Landing() {
+  const { isAuthenticated } = useAuth()
+  const navigate = useNavigate()
   const [activeFaq, setActiveFaq] = useState(null)
   const [activeSection, setActiveSection] = useState('')
   const [showBackToTop, setShowBackToTop] = useState(false)
+  const handleRoutePreload = (path) => {
+    preloadRoute(path)
+  }
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/dashboard', { replace: true })
+    }
+  }, [isAuthenticated, navigate])
 
   useEffect(() => {
     const updateActiveSection = () => {
@@ -152,6 +166,8 @@ export default function Landing() {
     window.history.pushState(null, '', window.location.pathname)
   }
 
+  if (isAuthenticated) return null
+
   return (
     <div className="min-h-screen bg-[#f8fafc]">
       <header className="sticky top-0 z-50 bg-brand-navy/95 shadow-lg shadow-brand-navy/20 backdrop-blur-xl">
@@ -181,6 +197,9 @@ export default function Landing() {
           <div className="flex items-center gap-2">
             <Link
               to="/login"
+              onMouseEnter={() => handleRoutePreload('/login')}
+              onFocus={() => handleRoutePreload('/login')}
+              onTouchStart={() => handleRoutePreload('/login')}
               className="hidden items-center gap-2 rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold text-white/85 transition-all duration-300 hover:-translate-y-0.5 hover:bg-white/10 hover:text-white sm:inline-flex"
             >
               <LogIn className="h-4 w-4" />
@@ -188,6 +207,9 @@ export default function Landing() {
             </Link>
             <Link
               to="/register"
+              onMouseEnter={() => handleRoutePreload('/register')}
+              onFocus={() => handleRoutePreload('/register')}
+              onTouchStart={() => handleRoutePreload('/register')}
               className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-bold text-brand-navy shadow-lg shadow-black/15 transition-all duration-300 hover:-translate-y-0.5 hover:bg-cyan-50"
             >
               Mulai
@@ -215,6 +237,9 @@ export default function Landing() {
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <Link
                 to="/register"
+                onMouseEnter={() => handleRoutePreload('/register')}
+                onFocus={() => handleRoutePreload('/register')}
+                onTouchStart={() => handleRoutePreload('/register')}
                 className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-7 py-3 text-base font-bold text-brand-navy shadow-xl shadow-black/20 transition-all duration-300 hover:-translate-y-0.5 hover:bg-cyan-50"
               >
                 Mulai Produktif
@@ -247,6 +272,10 @@ export default function Landing() {
             <img
               src={heroArt}
               alt=""
+              width="144"
+              height="144"
+              decoding="async"
+              fetchPriority="high"
               className="pointer-events-none absolute -right-4 -top-10 hidden w-36 opacity-80 drop-shadow-2xl md:block"
             />
             <div className="relative rounded-[28px] border border-white/15 bg-white/15 p-4 shadow-2xl shadow-black/25 backdrop-blur-md">
@@ -479,7 +508,15 @@ export default function Landing() {
                   <p className="text-sm italic leading-relaxed text-slate-600">&ldquo;{t.text}&rdquo;</p>
                 </div>
                 <div className="mt-7 flex items-center gap-3 border-t border-slate-200 pt-5">
-                  <img src={t.avatar} alt={t.name} className="h-11 w-11 rounded-full border border-slate-200 bg-blue-50 transition-transform duration-300 group-hover:scale-105" />
+                  <img
+                    src={t.avatar}
+                    alt={t.name}
+                    width="44"
+                    height="44"
+                    loading="lazy"
+                    decoding="async"
+                    className="h-11 w-11 rounded-full border border-slate-200 bg-blue-50 transition-transform duration-300 group-hover:scale-105"
+                  />
                   <div>
                     <h4 className="text-sm font-black text-slate-950">{t.name}</h4>
                     <p className="text-xs font-medium text-slate-500">{t.role}</p>

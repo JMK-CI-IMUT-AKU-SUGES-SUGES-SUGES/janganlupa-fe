@@ -1,34 +1,73 @@
+import { Suspense } from 'react'
+import { Toaster } from 'react-hot-toast'
 import { Navigate, Route, Routes } from 'react-router-dom'
-import Landing from './pages/Landing'
-import Login from './pages/Login'
-import Register from './pages/Register'
-import Dashboard from './pages/Dashboard'
-import TaskList from './pages/TaskList'
-import Calendar from './pages/Calendar'
-import Profile from './pages/Profile'
-import Project from './pages/Project'
-import ProjectDetail from './pages/ProjectDetail'
-import Partner from './pages/Partner'
+import { AuthProvider } from './context/AuthContext'
+import ProtectedRoute from './components/ProtectedRoute'
+import {
+  CalendarPage,
+  DashboardPage,
+  LandingPage,
+  LoginPage,
+  PartnerPage,
+  ProfilePage,
+  ProjectDetailPage,
+  ProjectPage,
+  RegisterPage,
+  TaskListPage,
+} from './lib/routePreload'
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Landing />} />
-      <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Register />} />
-      <Route path="/dashboard" element={<Dashboard />} />
-      <Route path="/mytask" element={<TaskList />} />
-      <Route path="/projects" element={<Project />} />
-      <Route path="/projects/:projectId" element={<ProjectDetail />} />
-      <Route path="/partner" element={<Partner />} />
-      <Route path="/calendar" element={<Calendar />} />
-      <Route path="/beranda" element={<Navigate to="/dashboard" replace />} />
-      <Route path="/my-task" element={<Navigate to="/mytask" replace />} />
-      <Route path="/daftar-tugas" element={<Navigate to="/mytask" replace />} />
-      <Route path="/project" element={<Navigate to="/projects" replace />} />
-      <Route path="/kalender" element={<Navigate to="/calendar" replace />} />
-      <Route path="/profile" element={<Profile />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <AuthProvider>
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          duration: 4000,
+          style: {
+            borderRadius: '16px',
+            padding: '12px 16px',
+            fontSize: '14px',
+            fontWeight: 600,
+          },
+          success: {
+            iconTheme: { primary: '#059669', secondary: '#fff' },
+          },
+          error: {
+            iconTheme: { primary: '#e11d48', secondary: '#fff' },
+          },
+        }}
+      />
+      <Suspense
+        fallback={
+          <div className="flex min-h-screen items-center justify-center">
+            <p className="text-sm font-bold text-slate-500">Loading...</p>
+          </div>
+        }
+      >
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+
+          {/* Protected Routes */}
+          <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+          <Route path="/mytask" element={<ProtectedRoute><TaskListPage /></ProtectedRoute>} />
+          <Route path="/projects" element={<ProtectedRoute><ProjectPage /></ProtectedRoute>} />
+          <Route path="/projects/:projectId" element={<ProtectedRoute><ProjectDetailPage /></ProtectedRoute>} />
+          <Route path="/partner" element={<ProtectedRoute><PartnerPage /></ProtectedRoute>} />
+          <Route path="/calendar" element={<ProtectedRoute><CalendarPage /></ProtectedRoute>} />
+          <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+
+          {/* Aliases */}
+          <Route path="/beranda" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/my-task" element={<Navigate to="/mytask" replace />} />
+          <Route path="/daftar-tugas" element={<Navigate to="/mytask" replace />} />
+          <Route path="/project" element={<Navigate to="/projects" replace />} />
+          <Route path="/kalender" element={<Navigate to="/calendar" replace />} />
+
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
+    </AuthProvider>
   )
 }

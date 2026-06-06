@@ -1,14 +1,45 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff } from 'lucide-react'
 import Logo from '../components/Logo'
 import WaveBackground from '../components/WaveBackground'
+import { useAuth } from '../context/AuthContext'
+import { loginSchema, formatZodErrors } from '../lib/validation'
 
 export default function Login() {
   const [showPassword, setShowPassword] = useState(false)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  
+  const { login } = useAuth()
+  const navigate = useNavigate()
+
+  const handleLogin = async (e) => {
+    e.preventDefault()
+    setError('')
+
+    const result = loginSchema.safeParse({ email, password })
+    if (!result.success) {
+      setError(formatZodErrors(result.error))
+      return
+    }
+
+    setLoading(true)
+
+    try {
+      await login(email, password)
+      navigate('/dashboard')
+    } catch (err) {
+      setError(err.response?.data?.meta?.message || 'Login gagal, periksa email dan password Anda.')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   return (
-    <WaveBackground className="flex items-center justify-center py-12">
+    <WaveBackground className="flex min-h-screen items-center justify-center py-12">
       <div className="mx-auto w-full max-w-lg px-4">
         <div className="overflow-hidden rounded-[28px] border border-white/70 bg-white/90 shadow-2xl shadow-brand-navy/10 backdrop-blur-xl">
           <div className="bg-[linear-gradient(135deg,#001529_0%,#0052cc_62%,#14b8a6_100%)] px-8 py-7 text-white">
@@ -27,16 +58,26 @@ export default function Login() {
           </div>
 
           <div className="p-8">
-            <form className="space-y-4" onSubmit={(e) => e.preventDefault()}>
+            {error && (
+              <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-600">
+                {error}
+              </div>
+            )}
+            
+            <form className="space-y-4" onSubmit={handleLogin}>
               <input
                 type="email"
                 placeholder="emailkamu@gmail.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-brand-navy focus:ring-4 focus:ring-brand/10"
               />
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
                   placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                   className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 pr-11 text-sm text-slate-900 outline-none transition focus:border-brand-navy focus:ring-4 focus:ring-brand/10"
                 />
                 <button
@@ -52,12 +93,13 @@ export default function Login() {
                 </button>
               </div>
 
-              <Link
-                to="/dashboard"
-                className="block w-full rounded-xl bg-brand-navy py-3 text-center text-sm font-bold text-white shadow-lg shadow-brand-navy/15 transition-all hover:-translate-y-0.5 hover:bg-brand"
+              <button
+                type="submit"
+                disabled={loading}
+                className="block w-full rounded-xl bg-brand-navy py-3 text-center text-sm font-bold text-white shadow-lg shadow-brand-navy/15 transition-all hover:-translate-y-0.5 hover:bg-brand disabled:opacity-70 disabled:hover:translate-y-0"
               >
-                Log in
-              </Link>
+                {loading ? 'Logging in...' : 'Log in'}
+              </button>
             </form>
 
             <p className="mt-6 text-center text-sm text-muted">

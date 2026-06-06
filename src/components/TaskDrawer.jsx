@@ -10,6 +10,7 @@ import {
   taskStatusOptions,
 } from '../lib/taskBoard'
 import GlobalDrawer from './GlobalDrawer'
+import { taskSchema, formatZodErrors } from '../lib/validation'
 
 export default function TaskDrawer({
   open,
@@ -19,12 +20,14 @@ export default function TaskDrawer({
   onDelete,
   onSave,
   projects = [],
+  assigneeOptions = [],
   scopeMode = 'all',
   lockedProjectId = '',
   lockAssignee = false,
   maxDueDate = '',
 }) {
   const [form, setForm] = useState(() => task ?? createTaskDraft())
+  const [error, setError] = useState('')
   const isEditMode = mode === 'edit'
   const isProjectOnly = scopeMode === 'projectOnly'
   const isPersonalOnly = scopeMode === 'personalOnly'
@@ -38,6 +41,7 @@ export default function TaskDrawer({
 
   const handleSubmit = useCallback((event) => {
     event.preventDefault()
+    setError('')
 
     const baseForm =
       scopeMode === 'personalOnly'
@@ -56,6 +60,12 @@ export default function TaskDrawer({
             dueDate: maxDueDate,
           }
         : baseForm
+
+    const result = taskSchema.safeParse(nextForm)
+    if (!result.success) {
+      setError(formatZodErrors(result.error))
+      return
+    }
 
     onSave(nextForm)
   }, [form, maxDueDate, onSave, scopeMode])
@@ -97,6 +107,16 @@ export default function TaskDrawer({
       projectName: relatedProject?.name ?? '',
     }))
   }, [projects])
+
+  const handleAssigneeChange = useCallback((value) => {
+    const selectedAssignee = assigneeOptions.find((option) => option.value === value)
+
+    setForm((current) => ({
+      ...current,
+      assigneeId: selectedAssignee?.value ?? '',
+      assignee: selectedAssignee?.label ?? current.assignee,
+    }))
+  }, [assigneeOptions])
 
   const handleStatusChange = useCallback((status) => {
     setForm((current) => ({
@@ -157,6 +177,8 @@ export default function TaskDrawer({
     () => (isProjectOnly || form.scope === 'project') && !isPersonalOnly,
     [form.scope, isPersonalOnly, isProjectOnly]
   )
+
+  const showAssigneeSelect = !isPersonalOnly && !lockAssignee && assigneeOptions.length > 0
 
   return (
     <GlobalDrawer
@@ -358,6 +380,23 @@ export default function TaskDrawer({
                     {form.assignee}
                   </p>
                 </div>
+              ) : showAssigneeSelect ? (
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-semibold text-brand-navy">
+                    PIC
+                  </span>
+                  <select
+                    value={form.assigneeId}
+                    onChange={(event) => handleAssigneeChange(event.target.value)}
+                    className="w-full cursor-pointer appearance-none rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-brand-navy focus:ring-4 focus:ring-brand/10"
+                  >
+                    {assigneeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               ) : (
                 <label className="block">
                   <span className="mb-1.5 block text-sm font-semibold text-brand-navy">
@@ -484,29 +523,36 @@ export default function TaskDrawer({
             </div>
           </div>
 
-          <div className="flex shrink-0 items-center justify-between gap-4 border-t border-slate-200 bg-white px-6 py-4">
-            <div>
-              {isEditMode ? (
-                <button
-                  type="button"
-                  onClick={() => onDelete(form.id)}
-                  className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-bold text-rose-600 transition hover:-translate-y-0.5 hover:bg-rose-100"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Hapus tugas
-                </button>
-              ) : (
-                <div />
-              )}
-            </div>
+          <div className="space-y-3 border-t border-slate-200 bg-white px-6 py-4">
+            {error ? (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-600">
+                {error}
+              </div>
+            ) : null}
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                {isEditMode ? (
+                  <button
+                    type="button"
+                    onClick={() => onDelete(form.id)}
+                    className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-bold text-rose-600 transition hover:-translate-y-0.5 hover:bg-rose-100"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Hapus tugas
+                  </button>
+                ) : (
+                  <div />
+                )}
+              </div>
 
-            <button
-              type="submit"
-              className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-brand-navy px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-brand-navy/15 transition-all hover:-translate-y-0.5 hover:bg-brand"
-            >
-              <Save className="h-4 w-4" />
-              Simpan tugas
-            </button>
+              <button
+                type="submit"
+                className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-brand-navy px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-brand-navy/15 transition-all hover:-translate-y-0.5 hover:bg-brand"
+              >
+                <Save className="h-4 w-4" />
+                Simpan tugas
+              </button>
+            </div>
           </div>
         </form>
       </div>

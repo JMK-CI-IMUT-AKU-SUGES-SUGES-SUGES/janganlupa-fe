@@ -1,6 +1,22 @@
+import { useEffect } from 'react'
 import Navbar from '../components/Navbar'
+import { preloadRoutesWhenIdle } from '../lib/routePreload'
+
+const idlePreloadTargets = {
+  Dashboard: ['/mytask', '/projects'],
+  'My Task': ['/dashboard', '/calendar'],
+  Projects: ['/dashboard', '/mytask'],
+  Calendar: ['/mytask', '/dashboard'],
+  Partner: ['/dashboard', '/mytask'],
+  Profile: ['/dashboard', '/mytask'],
+}
 
 export default function AppLayout({ children, active }) {
+  useEffect(() => {
+    const nextPaths = idlePreloadTargets[active] || ['/dashboard', '/mytask']
+    return preloadRoutesWhenIdle(nextPaths)
+  }, [active])
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-white">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,rgba(0,102,255,0.08)_1px,transparent_1px),linear-gradient(to_bottom,rgba(0,102,255,0.08)_1px,transparent_1px)] [background-size:42px_42px]"></div>

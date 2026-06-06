@@ -1,5 +1,4 @@
-import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
 import {
   AtSign,
   CheckCircle2,
@@ -12,18 +11,20 @@ import {
   Users,
 } from 'lucide-react'
 import AppLayout from '../layouts/AppLayout'
-import useWorkspace from '../hooks/useWorkspace'
-import { getInitials } from '../lib/projectUtils'
+import { useAuth } from '../context/AuthContext'
+import api from '../lib/api'
+import { getAvatarDataUri, getInitials } from '../lib/projectUtils'
+import { profileSchema, formatZodErrors } from '../lib/validation'
 
 function buildInitialForm(currentUser) {
   return {
-    name: currentUser.name,
-    email: currentUser.email,
-    slug: currentUser.slug,
-    role: currentUser.role,
-    focus: currentUser.focus,
-    timezone: currentUser.timezone,
-    status: currentUser.status,
+    name: currentUser.name || '',
+    email: currentUser.email || '',
+    slug: currentUser.slug || '',
+    role_label: currentUser.role_label || '',
+    focus: currentUser.focus || '',
+    timezone: currentUser.timezone || '',
+    status: currentUser.status || '',
   }
 }
 
@@ -38,7 +39,7 @@ function normalizeProfileForm(form) {
     name: trimmedName,
     slug: normalizedSlug.startsWith('@') ? normalizedSlug : `@${normalizedSlug}`,
     email: form.email.trim(),
-    role: form.role.trim(),
+    role_label: form.role_label.trim(),
     focus: form.focus.trim(),
     timezone: form.timezone.trim(),
     status: form.status.trim(),
@@ -84,36 +85,66 @@ function Field({ label, icon: Icon, children, readOnly = false }) {
   )
 }
 
+function ListTodoIcon(props) {
+  return <CheckCircle2 {...props} />
+}
+
 export default function Profile() {
-  const { currentUser, partnerRequests, projects, tasks, updateCurrentUser } = useWorkspace()
-  const [form, setForm] = useState(() => buildInitialForm(currentUser))
+  const { user, logout } = useAuth()
 
-  const connectedPartners = useMemo(
-    () => partnerRequests.filter((request) => request.direction === 'connected'),
-    [partnerRequests]
-  )
+  const [form, setForm] = useState(() => buildInitialForm(user))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
 
-  const myTasks = useMemo(
-    () => tasks.filter((task) => task.assignee === currentUser.name),
-    [currentUser.name, tasks]
-  )
+  const [taskCount, setTaskCount] = useState(null)
+  const [projectCount, setProjectCount] = useState(null)
+  const [partnerList, setPartnerList] = useState([])
+  const [statsLoading, setStatsLoading] = useState(true)
 
-  const activeTasks = myTasks.filter((task) => task.status !== 'selesai')
-  const relatedProjects = projects.filter(
-    (project) =>
-      project.owner === currentUser.name ||
-      project.admins.includes(currentUser.name) ||
-      project.members.includes(currentUser.name)
-  )
+  useEffect(() => {
+    setForm(buildInitialForm(user))
+  }, [user])
+
+  useEffect(() => {
+    async function load() {
+      try {
+        setStatsLoading(true)
+        const [tasksRes, projectsRes, partnersRes] = await Promise.all([
+          api.get('/tasks'),
+          api.get('/projects'),
+          api.get('/partners'),
+        ])
+
+        const t = tasksRes.data?.data?.tasks || []
+        const p = projectsRes.data?.data?.projects || []
+        const partners = partnersRes.data?.data?.partners || []
+
+        setTaskCount(t.length)
+        setProjectCount(p.length)
+        setPartnerList(partners)
+      } catch (err) {
+        console.error('Profile API error:', err)
+      } finally {
+        setStatsLoading(false)
+      }
+    }
+    load()
+  }, [])
+
+  const activeTasks = taskCount ?? 0
+  const myTaskCount = taskCount ?? 0
+  const relatedProjectCount = projectCount ?? 0
+  const connectedPartnerCount = partnerList.length
 
   const hasChanges =
-    form.name !== currentUser.name ||
-    form.email !== currentUser.email ||
-    form.slug !== currentUser.slug ||
-    form.role !== currentUser.role ||
-    form.focus !== currentUser.focus ||
-    form.timezone !== currentUser.timezone ||
-    form.status !== currentUser.status
+    form.name !== user.name ||
+    form.email !== user.email ||
+    form.slug !== user.slug ||
+    form.role_label !== (user.role_label || '') ||
+    form.focus !== (user.focus || '') ||
+    form.timezone !== (user.timezone || '') ||
+    form.status !== (user.status || '')
 
   const handleChange = (field, value) => {
     setForm((current) => ({
@@ -123,17 +154,33 @@ export default function Profile() {
   }
 
   const handleReset = () => {
-    setForm(buildInitialForm(currentUser))
+    setForm(buildInitialForm(user))
   }
 
-  const handleSave = (event) => {
+  const handleSave = async (event) => {
     event.preventDefault()
-    const nextForm = normalizeProfileForm(form)
-    updateCurrentUser(nextForm)
-    setForm(buildInitialForm({ ...currentUser, ...nextForm }))
+    setError('')
+    setSuccess('')
+
+    const result = profileSchema.safeParse(normalizeProfileForm(form))
+    if (!result.success) {
+      setError(formatZodErrors(result.error))
+      return
+    }
+
+    try {
+      setSaving(true)
+      await api.put('/profile', result.data)
+      setForm(buildInitialForm({ ...user, ...result.data }))
+      setSuccess('Profile berhasil diperbarui')
+    } catch (err) {
+      setError(err.response?.data?.meta?.message || 'Gagal menyimpan profile')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const avatarSeed = encodeURIComponent(form.slug || form.name)
+  const avatarSrc = getAvatarDataUri(form.slug || form.name || 'User')
 
   return (
     <AppLayout>
@@ -147,10 +194,10 @@ export default function Profile() {
 
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">
-            {currentUser.id}
+            {user.id}
           </span>
           <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700">
-            {currentUser.status}
+            {user.status || 'Aktif'}
           </span>
         </div>
       </section>
@@ -160,8 +207,11 @@ export default function Profile() {
           <div className="overflow-hidden rounded-[30px] bg-[linear-gradient(135deg,#001529_0%,#0052cc_62%,#14b8a6_100%)] p-6 text-white shadow-2xl shadow-brand/15">
             <div className="flex flex-col items-center text-center">
               <img
-                src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${avatarSeed}`}
+                src={avatarSrc}
                 alt={form.name}
+                width="112"
+                height="112"
+                decoding="async"
                 className="h-28 w-28 rounded-full border-4 border-white/40 bg-white/10 object-cover shadow-xl"
               />
               <h2 className="mt-4 text-2xl font-black">{form.name}</h2>
@@ -181,27 +231,33 @@ export default function Profile() {
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-100">
                   Task aktif
                 </p>
-                <p className="mt-2 text-2xl font-black">{activeTasks.length}</p>
+                <p className="mt-2 text-2xl font-black">
+                  {statsLoading ? '-' : activeTasks}
+                </p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/10 p-4 text-center backdrop-blur-sm">
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-100">
                   Project
                 </p>
-                <p className="mt-2 text-2xl font-black">{relatedProjects.length}</p>
+                <p className="mt-2 text-2xl font-black">
+                  {statsLoading ? '-' : relatedProjectCount}
+                </p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/10 p-4 text-center backdrop-blur-sm">
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-100">
                   Partner
                 </p>
-                <p className="mt-2 text-2xl font-black">{connectedPartners.length}</p>
+                <p className="mt-2 text-2xl font-black">
+                  {statsLoading ? '-' : connectedPartnerCount}
+                </p>
               </div>
             </div>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-3">
-            <StatCard icon={ListTodoIcon} label="My Task" value={myTasks.length} tone="slate" />
-            <StatCard icon={FolderOpen} label="Workspace" value={relatedProjects.length} tone="blue" />
-            <StatCard icon={Users} label="Terhubung" value={connectedPartners.length} tone="emerald" />
+            <StatCard icon={ListTodoIcon} label="My Task" value={statsLoading ? '-' : myTaskCount} tone="slate" />
+            <StatCard icon={FolderOpen} label="Workspace" value={statsLoading ? '-' : relatedProjectCount} tone="blue" />
+            <StatCard icon={Users} label="Terhubung" value={statsLoading ? '-' : connectedPartnerCount} tone="emerald" />
           </div>
 
           <div className="rounded-[30px] border border-slate-200/80 bg-white/90 p-6 shadow-xl shadow-slate-200/50 backdrop-blur-xl">
@@ -216,8 +272,8 @@ export default function Profile() {
             </div>
 
             <div className="mt-5 space-y-3">
-              {connectedPartners.length > 0 ? (
-                connectedPartners.slice(0, 4).map((partner) => (
+              {partnerList.length > 0 ? (
+                partnerList.slice(0, 4).map((partner) => (
                   <div
                     key={partner.id}
                     className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3"
@@ -232,7 +288,7 @@ export default function Profile() {
                       </div>
                     </div>
                     <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
-                      {partner.status}
+                      Terhubung
                     </span>
                   </div>
                 ))
@@ -249,6 +305,16 @@ export default function Profile() {
           onSubmit={handleSave}
           className="rounded-[30px] border border-slate-200/80 bg-white/90 p-6 shadow-2xl shadow-slate-200/60 backdrop-blur-xl"
         >
+          {error ? (
+            <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-600">
+              {error}
+            </div>
+          ) : null}
+          {success ? (
+            <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
+              {success}
+            </div>
+          ) : null}
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-sm font-bold uppercase tracking-[0.18em] text-brand">
@@ -260,20 +326,21 @@ export default function Profile() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Link
-                to="/login"
-                className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-600 transition hover:-translate-y-0.5 hover:border-brand/20 hover:bg-white hover:text-brand"
+              <button
+                type="button"
+                onClick={logout}
+                className="inline-flex min-h-[48px] cursor-pointer items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-600 transition hover:-translate-y-0.5 hover:border-brand/20 hover:bg-white hover:text-brand"
               >
                 <LogOut className="h-4 w-4" />
                 Logout
-              </Link>
+              </button>
               <button
                 type="submit"
-                disabled={!hasChanges}
+                disabled={!hasChanges || saving}
                 className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-2xl bg-brand-navy px-5 py-3 text-sm font-bold text-white shadow-lg shadow-brand-navy/15 transition hover:-translate-y-0.5 hover:bg-brand disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
               >
                 <Save className="h-4 w-4" />
-                Simpan
+                {saving ? 'Menyimpan...' : 'Simpan'}
               </button>
             </div>
           </div>
@@ -318,8 +385,8 @@ export default function Profile() {
             <Field label="Peran" icon={CheckCircle2}>
               <input
                 type="text"
-                value={form.role}
-                onChange={(event) => handleChange('role', event.target.value)}
+                value={form.role_label}
+                onChange={(event) => handleChange('role_label', event.target.value)}
                 className="w-full border-0 bg-transparent p-0 text-sm font-bold text-brand-navy outline-none"
               />
             </Field>
@@ -349,7 +416,7 @@ export default function Profile() {
             <button
               type="button"
               onClick={handleReset}
-              className="inline-flex min-h-[48px] items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 text-sm font-bold text-slate-600 transition hover:-translate-y-0.5 hover:border-brand/20 hover:bg-white hover:text-brand"
+              className="inline-flex min-h-[48px] cursor-pointer items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 text-sm font-bold text-slate-600 transition hover:-translate-y-0.5 hover:border-brand/20 hover:bg-white hover:text-brand"
             >
               Reset
             </button>
@@ -361,8 +428,4 @@ export default function Profile() {
       </section>
     </AppLayout>
   )
-}
-
-function ListTodoIcon(props) {
-  return <CheckCircle2 {...props} />
 }

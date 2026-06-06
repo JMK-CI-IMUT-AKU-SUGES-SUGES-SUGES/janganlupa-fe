@@ -8,6 +8,7 @@ import {
   projectRoleMeta,
 } from '../lib/projectUtils'
 import { createTaskLinkDraft } from '../lib/taskBoard'
+import { projectSchema, formatZodErrors } from '../lib/validation'
 
 export default function ProjectEditorDrawer({
   mode = 'edit',
@@ -16,8 +17,10 @@ export default function ProjectEditorDrawer({
   currentUserName,
   onClose,
   onSave,
+  serverError = '',
 }) {
   const [form, setForm] = useState(project)
+  const [error, setError] = useState('')
 
   if (!form) return null
 
@@ -31,10 +34,19 @@ export default function ProjectEditorDrawer({
       ...current,
       [field]: value,
     }))
+    setError('')
   }
 
   const handleSubmit = (event) => {
     event.preventDefault()
+    setError('')
+
+    const result = projectSchema.safeParse(form)
+    if (!result.success) {
+      setError(formatZodErrors(result.error))
+      return
+    }
+
     onSave(form)
   }
 
@@ -246,14 +258,21 @@ export default function ProjectEditorDrawer({
             </div>
           </div>
 
-          <div className="flex shrink-0 items-center justify-end gap-4 border-t border-slate-200 bg-white px-6 py-4">
-            <button
-              type="submit"
-              className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-brand-navy px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-brand-navy/15 transition-all hover:-translate-y-0.5 hover:bg-brand"
-            >
-              <Save className="h-4 w-4" />
-              {isCreateMode ? 'Buat project' : 'Simpan project'}
-            </button>
+          <div className="space-y-3 border-t border-slate-200 bg-white px-6 py-4">
+            {(error || serverError) ? (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-600">
+                {error || serverError}
+              </div>
+            ) : null}
+            <div className="flex items-center justify-end gap-4">
+              <button
+                type="submit"
+                className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-brand-navy px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-brand-navy/15 transition-all hover:-translate-y-0.5 hover:bg-brand"
+              >
+                <Save className="h-4 w-4" />
+                {isCreateMode ? 'Buat project' : 'Simpan project'}
+              </button>
+            </div>
           </div>
         </form>
       </div>

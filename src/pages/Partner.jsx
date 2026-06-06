@@ -1,9 +1,13 @@
-import { useCallback, useMemo, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
+import toast from 'react-hot-toast'
 import { ArrowUpRight, AtSign, BellDot, Inbox, Plus, Users } from 'lucide-react'
 import AppLayout from '../layouts/AppLayout'
-import PartnerProfileModal from '../components/PartnerProfileModal'
-import useWorkspace from '../hooks/useWorkspace'
+import { useAuth } from '../context/AuthContext'
+import api from '../lib/api'
 import { getInitials } from '../lib/projectUtils'
+import { partnerSlugSchema, formatZodErrors } from '../lib/validation'
+
+const PartnerProfileModal = lazy(() => import('../components/PartnerProfileModal'))
 
 function normalizeSlugInput(value = '') {
   const compactValue = value.trim().replace(/\s+/g, '')
@@ -13,25 +17,11 @@ function normalizeSlugInput(value = '') {
     : `@${compactValue.toLowerCase()}`
 }
 
-function getSharedProjectCount(partnerName, projects) {
-  return getSharedProjectNames(partnerName, projects).length
-}
-
-function getSharedProjectNames(partnerName, projects) {
-  const normalizedNames = partnerName
-    .toLowerCase()
-    .split(' ')
-    .filter(Boolean)
-
+function getSharedProjectNames(partnerId, projects) {
   return projects
     .filter((project) => {
-      const projectPeople = [
-        project.owner,
-        ...project.admins,
-        ...project.members,
-      ].map((person) => person.toLowerCase())
-
-      return normalizedNames.some((name) => projectPeople.includes(name))
+      const projectPeopleIds = project.users?.map(u => u.id) || []
+      return projectPeopleIds.includes(partnerId)
     })
     .map((project) => project.name)
 }
@@ -55,7 +45,7 @@ function PartnerRow({ partner, accent = 'emerald', extraLabel, onOpen }) {
   return (
     <button
       type="button"
-      onClick={() => onOpen(partner.id)}
+      onClick={() => onOpen(partner.id, partner.relationId)}
       className="group w-full cursor-pointer rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-4 text-left transition hover:-translate-y-0.5 hover:border-brand/20 hover:bg-white hover:shadow-lg hover:shadow-slate-200/50"
     >
       <div className="flex items-center justify-between gap-3">
@@ -92,89 +82,167 @@ function PartnerRow({ partner, accent = 'emerald', extraLabel, onOpen }) {
 }
 
 export default function Partner() {
-  const {
-    acceptPartnerRequest,
-    createPartnerRequest,
-    currentUser,
-    partnerRequests,
-    projects,
-    removePartnerRequest,
-  } = useWorkspace()
+  const { user } = useAuth()
   const [slugInput, setSlugInput] = useState('')
   const [activePartnerId, setActivePartnerId] = useState(null)
+  const [activeRelationId, setActiveRelationId] = useState(null)
+
+  const [partners, setPartners] = useState([])
+  const [incoming, setIncoming] = useState([])
+  const [outgoing, setOutgoing] = useState([])
+  const [projects, setProjects] = useState([])
+  const [loading, setLoading] = useState(false)
 
   const normalizedSlug = normalizeSlugInput(slugInput)
-  const enrichedPartners = useMemo(
-    () =>
-      partnerRequests.map((partner) => ({
-        ...partner,
-        sharedProjects: getSharedProjectCount(partner.name, projects),
-        relatedProjects: getSharedProjectNames(partner.name, projects),
-      })),
-    [partnerRequests, projects]
-  )
 
-  const connectedPartners = useMemo(
-    () =>
-      enrichedPartners
-        .filter((request) => request.direction === 'connected')
-        .sort((left, right) => right.sharedProjects - left.sharedProjects),
-    [enrichedPartners]
-  )
+  const fetchData = useCallback(async () => {
+    try {
+      setLoading(true)
+      const [partnersRes, requestsRes, projectsRes] = await Promise.all([
+        api.get('/partners'),
+        api.get('/partners/requests'),
+        api.get('/projects')
+      ])
 
-  const pendingPartners = useMemo(
-    () => enrichedPartners.filter((request) => request.direction === 'outgoing'),
-    [enrichedPartners]
-  )
+      const connected = partnersRes.data.data.partners.map(p => ({
+        ...p,
+        relationId: p.relation_id,
+        direction: 'connected',
+        status: 'Terhubung',
+        note: 'Partner aktif'
+      }))
 
-  const friendRequests = useMemo(
-    () => enrichedPartners.filter((request) => request.direction === 'incoming'),
-    [enrichedPartners]
-  )
-  const activePartner = useMemo(
-    () => enrichedPartners.find((partner) => partner.id === activePartnerId) ?? null,
-    [activePartnerId, enrichedPartners]
-  )
+      const inc = requestsRes.data.data.incoming.map(r => ({
+        ...r.requester,
+        direction: 'incoming',
+        status: 'Perlu ditinjau',
+        note: r.note || 'Ingin terhubung',
+        relationId: r.id
+      }))
 
-  const hasDuplicateSlug = partnerRequests.some(
-    (request) => request.slug === normalizedSlug
-  )
-  const isOwnSlug = normalizedSlug === currentUser.slug
-  const canSubmit = normalizedSlug.length > 0 && !hasDuplicateSlug && !isOwnSlug
+      const out = requestsRes.data.data.outgoing.map(r => ({
+        ...r.receiver,
+        direction: 'outgoing',
+        status: 'Menunggu',
+        note: r.note || 'Menunggu konfirmasi',
+        relationId: r.id
+      }))
 
-  const handleSubmit = (event) => {
+      setPartners(connected)
+      setIncoming(inc)
+      setOutgoing(out)
+      setProjects(projectsRes.data.data.projects)
+    } catch (error) {
+      console.error('Error fetching partner data:', error)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
+
+  const enrichedConnected = useMemo(() => {
+    return partners.map(p => {
+      const sharedNames = getSharedProjectNames(p.id, projects)
+      return {
+        ...p,
+        sharedProjects: sharedNames.length,
+        relatedProjects: sharedNames
+      }
+    }).sort((a, b) => b.sharedProjects - a.sharedProjects)
+  }, [partners, projects])
+
+  const allRequests = useMemo(() => [...incoming, ...outgoing], [incoming, outgoing])
+  const activePartner = useMemo(() => {
+    const all = [...enrichedConnected, ...allRequests]
+    return all.find(p => p.id === activePartnerId) || null
+  }, [activePartnerId, enrichedConnected, allRequests])
+
+  const isOwnSlug = normalizedSlug === user?.slug
+  const hasDuplicateSlug = [...partners, ...allRequests].some(p => p.slug === normalizedSlug)
+  const canSubmit = normalizedSlug.length > 0 && !hasDuplicateSlug && !isOwnSlug && !loading
+
+  const handleSubmit = async (event) => {
     event.preventDefault()
     if (!canSubmit) return
 
-    createPartnerRequest({
-      slug: normalizedSlug,
-      note: 'Menunggu konfirmasi partner',
-    })
-    setSlugInput('')
+    const result = partnerSlugSchema.safeParse({ slug: normalizedSlug })
+    if (!result.success) {
+      toast.error(formatZodErrors(result.error))
+      return
+    }
+
+    try {
+      setLoading(true)
+      await api.post('/partners/request', {
+        slug: normalizedSlug.replace(/^@/, ''),
+        note: 'Menunggu konfirmasi partner'
+      })
+      toast.success('Permintaan partner terkirim')
+      setSlugInput('')
+      fetchData()
+    } catch (error) {
+      toast.error(error.response?.data?.meta?.message || 'Gagal mengirim request')
+    } finally {
+      setLoading(false)
+    }
   }
 
-  const openPartnerModal = useCallback((partnerId) => {
+  const openPartnerModal = useCallback((partnerId, relationId) => {
     setActivePartnerId(partnerId)
+    setActiveRelationId(relationId)
   }, [])
 
   const closePartnerModal = useCallback(() => {
     setActivePartnerId(null)
+    setActiveRelationId(null)
   }, [])
 
   const handleRemovePartner = useCallback(
-    (partnerId) => {
-      removePartnerRequest(partnerId)
-      setActivePartnerId(null)
+    async (partnerId) => {
+      if (!partnerId) {
+        toast.error('ID partner tidak valid')
+        return
+      }
+
+      try {
+        const relId = activeRelationId
+        if (relId) {
+           await api.delete(`/partners/${relId}`)
+           toast.success('Partner berhasil dihapus')
+           fetchData()
+        } else {
+           toast.error("Maaf, API saat ini memerlukan ID Relasi untuk menghapus partner aktif. (Akan diperbaiki di backend)")
+        }
+        closePartnerModal()
+      } catch (err) {
+        toast.error(err.response?.data?.meta?.message || 'Gagal menghapus partner')
+      }
     },
-    [removePartnerRequest]
+    [activeRelationId, closePartnerModal, fetchData]
   )
 
   const handleAcceptPartner = useCallback(
-    (partnerId) => {
-      acceptPartnerRequest(partnerId)
-      setActivePartnerId(null)
+    async (partnerId) => {
+      if (!partnerId) {
+        toast.error('ID partner tidak valid')
+        return
+      }
+
+      try {
+        if (activeRelationId) {
+          await api.put(`/partners/requests/${activeRelationId}`, { status: 'accepted' })
+          toast.success('Permintaan partner diterima')
+          fetchData()
+        }
+        closePartnerModal()
+      } catch (err) {
+        toast.error(err.response?.data?.meta?.message || 'Gagal menerima partner')
+      }
     },
-    [acceptPartnerRequest]
+    [activeRelationId, closePartnerModal, fetchData]
   )
 
   return (
@@ -198,7 +266,7 @@ export default function Partner() {
                 </p>
                 <div className="mt-2 flex items-center gap-2">
                   <AtSign className="h-4 w-4 text-cyan-100" />
-                  <p className="text-lg font-black">{currentUser.slug.replace(/^@/, '')}</p>
+                  <p className="text-lg font-black">{user?.slug?.replace(/^@/, '')}</p>
                 </div>
               </div>
 
@@ -206,7 +274,7 @@ export default function Partner() {
                 <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
                   ID akun
                 </p>
-                <p className="mt-2 text-lg font-black text-brand-navy">{currentUser.id}</p>
+                <p className="mt-2 text-lg font-black text-brand-navy">{user?.id?.split('-')[0]}</p>
               </div>
             </div>
           </div>
@@ -219,13 +287,13 @@ export default function Partner() {
                 </p>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <span className="rounded-full bg-white px-3 py-1.5 text-xs font-bold text-slate-600 shadow-sm">
-                    {connectedPartners.length} partner
+                    {enrichedConnected.length} partner
                   </span>
                   <span className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-brand">
-                    {pendingPartners.length} pending
+                    {outgoing.length} pending
                   </span>
                   <span className="rounded-full bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700">
-                    {friendRequests.length} permohonan
+                    {incoming.length} permohonan
                   </span>
                 </div>
               </div>
@@ -251,7 +319,7 @@ export default function Partner() {
                   className="inline-flex min-h-[72px] cursor-pointer items-center justify-center gap-2 rounded-2xl bg-brand-navy px-5 py-3 text-sm font-bold text-white shadow-lg shadow-brand-navy/15 transition-all hover:-translate-y-0.5 hover:bg-brand disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
                 >
                   <Plus className="h-4 w-4" />
-                  Tambah partner
+                  {loading ? 'Processing...' : 'Tambah partner'}
                 </button>
               </form>
             </div>
@@ -260,7 +328,7 @@ export default function Partner() {
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 {hasDuplicateSlug ? (
                   <span className="rounded-full bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600">
-                    Slug sudah ada
+                    Slug sudah terhubung / pending
                   </span>
                 ) : null}
                 {isOwnSlug ? (
@@ -282,13 +350,13 @@ export default function Partner() {
               Daftar partner
             </div>
             <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700">
-              {connectedPartners.length} terhubung
+              {enrichedConnected.length} terhubung
             </span>
           </div>
 
           <div className="space-y-3">
-            {connectedPartners.length > 0 ? (
-              connectedPartners.map((partner) => (
+            {enrichedConnected.length > 0 ? (
+              enrichedConnected.map((partner) => (
                 <PartnerRow
                   key={partner.id}
                   partner={partner}
@@ -309,7 +377,7 @@ export default function Partner() {
               Pending & permohonan
             </p>
             <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">
-              {pendingPartners.length + friendRequests.length} item
+              {outgoing.length + incoming.length} item
             </span>
           </div>
 
@@ -320,10 +388,10 @@ export default function Partner() {
                 Pending partner
               </div>
               <div className="space-y-3">
-                {pendingPartners.length > 0 ? (
-                  pendingPartners.map((partner) => (
+                {outgoing.length > 0 ? (
+                  outgoing.map((partner) => (
                     <PartnerRow
-                      key={partner.id}
+                      key={partner.relationId}
                       partner={partner}
                       accent="blue"
                       onOpen={openPartnerModal}
@@ -341,10 +409,10 @@ export default function Partner() {
                 Permohonan pertemanan
               </div>
               <div className="space-y-3">
-                {friendRequests.length > 0 ? (
-                  friendRequests.map((partner) => (
+                {incoming.length > 0 ? (
+                  incoming.map((partner) => (
                     <PartnerRow
-                      key={partner.id}
+                      key={partner.relationId}
                       partner={partner}
                       accent="amber"
                       onOpen={openPartnerModal}
@@ -359,13 +427,17 @@ export default function Partner() {
         </div>
       </section>
 
-      <PartnerProfileModal
-        open={Boolean(activePartner)}
-        partner={activePartner}
-        onClose={closePartnerModal}
-        onAccept={handleAcceptPartner}
-        onRemove={handleRemovePartner}
-      />
+      {activePartner ? (
+        <Suspense fallback={null}>
+          <PartnerProfileModal
+            open={Boolean(activePartner)}
+            partner={activePartner}
+            onClose={closePartnerModal}
+            onAccept={handleAcceptPartner}
+            onRemove={handleRemovePartner}
+          />
+        </Suspense>
+      ) : null}
     </AppLayout>
   )
 }

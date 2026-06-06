@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ArrowRight,
@@ -9,8 +10,9 @@ import {
   Zap,
 } from 'lucide-react'
 import AppLayout from '../layouts/AppLayout'
-import useWorkspace from '../hooks/useWorkspace'
-import { getProjectPeople, getProjectTaskStats } from '../lib/projectUtils'
+import { useAuth } from '../context/AuthContext'
+import api from '../lib/api'
+import { normalizeTask, normalizeProject, getProjectPeople, getProjectTaskStats } from '../lib/projectUtils'
 import { formatTaskDate } from '../lib/taskBoard'
 
 const weekDays = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab']
@@ -74,25 +76,71 @@ function SummaryLink({ to, icon: Icon, label, metric, detail, footer }) {
   )
 }
 
+function getGreeting() {
+  const hour = new Date().getHours()
+  if (hour >= 5 && hour < 12) return 'Selamat pagi'
+  if (hour >= 12 && hour < 15) return 'Selamat siang'
+  if (hour >= 15 && hour < 18) return 'Selamat sore'
+  return 'Selamat malam'
+}
+
 export default function Dashboard() {
-  const { currentUser, partnerRequests, projects, tasks } = useWorkspace()
+  const { user } = useAuth()
+
+  const [tasks, setTasks] = useState([])
+  const [projects, setProjects] = useState([])
+  const [connectedPartnerCount, setConnectedPartnerCount] = useState(0)
+  const [pendingPartnerCount, setPendingPartnerCount] = useState(0)
+  const [loading, setLoading] = useState(true)
+
+  const fetchDashboard = useCallback(async () => {
+    try {
+      setLoading(true)
+
+      const [tasksRes, projectsRes, partnersRes, requestsRes] = await Promise.all([
+        api.get('/tasks'),
+        api.get('/projects'),
+        api.get('/partners'),
+        api.get('/partners/requests'),
+      ])
+
+      const normalizedTasks = (tasksRes.data.data.tasks || []).map((t) =>
+        normalizeTask(t, user.name)
+      )
+      const normalizedProjects = (projectsRes.data.data.projects || []).map((p) =>
+        normalizeProject(p)
+      )
+
+      setTasks(normalizedTasks)
+      setProjects(normalizedProjects)
+      setConnectedPartnerCount(partnersRes.data.data.partners?.length || 0)
+
+      const incoming = requestsRes.data.data.incoming || []
+      const outgoing = requestsRes.data.data.outgoing || []
+      setPendingPartnerCount(incoming.length + outgoing.length)
+    } catch (error) {
+      console.error('Failed to fetch dashboard data:', error)
+    } finally {
+      setLoading(false)
+    }
+  }, [user.name])
+
+  useEffect(() => {
+    fetchDashboard()
+  }, [fetchDashboard])
 
   const today = new Date()
   const todayKey = toDateKey(today)
   const weekAheadKey = addDays(todayKey, 7)
-  const myTasks = tasks.filter((task) => task.assignee === currentUser.name)
-  const activeTasks = myTasks.filter((task) => task.status !== 'selesai')
-  const projectTasks = myTasks.filter((task) => task.scope === 'project')
-  const personalTasks = myTasks.filter((task) => task.scope === 'personal')
+
+  const activeTasks = tasks.filter((task) => task.status !== 'selesai')
+  const projectTasks = tasks.filter((task) => task.scope === 'project')
+  const personalTasks = tasks.filter((task) => task.scope === 'personal')
+
   const deadlinesThisWeek = [...activeTasks]
     .filter((task) => task.dueDate && task.dueDate >= todayKey && task.dueDate <= weekAheadKey)
     .sort((left, right) => left.dueDate.localeCompare(right.dueDate))
-  const connectedPartners = partnerRequests.filter(
-    (request) => request.direction === 'connected'
-  )
-  const pendingPartners = partnerRequests.filter(
-    (request) => request.direction === 'outgoing' || request.direction === 'incoming'
-  )
+
   const focusedProject = projects[0] ?? null
   const focusedProjectStats = focusedProject
     ? getProjectTaskStats(tasks, focusedProject.id, focusedProject.progress)
@@ -108,7 +156,8 @@ export default function Dashboard() {
 
   const currentMonthDate = new Date(today.getFullYear(), today.getMonth(), 1)
   const calendarDays = buildCalendarDays(currentMonthDate.getFullYear(), currentMonthDate.getMonth())
-  const tasksByDate = myTasks.reduce((map, task) => {
+
+  const tasksByDate = tasks.reduce((map, task) => {
     if (!task.dueDate) return map
     const bucket = map.get(task.dueDate) ?? []
     bucket.push(task)
@@ -118,7 +167,7 @@ export default function Dashboard() {
 
   const workloadSeries = Array.from({ length: 7 }, (_, index) => {
     const dateKey = addDays(todayKey, index)
-    const dailyTasks = myTasks.filter((task) => task.dueDate === dateKey)
+    const dailyTasks = tasks.filter((task) => task.dueDate === dateKey)
     const done = dailyTasks.filter((task) => task.status === 'selesai').length
     const active = dailyTasks.filter((task) => task.status === 'berjalan').length
     const backlog = dailyTasks.filter((task) => task.status === 'belum').length
@@ -136,8 +185,8 @@ export default function Dashboard() {
   })
 
   const maxWorkload = Math.max(...workloadSeries.map((item) => item.total), 1)
-  const completionRate = myTasks.length
-    ? Math.round((myTasks.filter((task) => task.status === 'selesai').length / myTasks.length) * 100)
+  const completionRate = tasks.length
+    ? Math.round((tasks.filter((task) => task.status === 'selesai').length / tasks.length) * 100)
     : 0
 
   const summaryLinks = [
@@ -165,17 +214,27 @@ export default function Dashboard() {
       detail: deadlinesThisWeek[0]
         ? `Terdekat ${formatTaskDate(deadlinesThisWeek[0].dueDate)}`
         : 'Minggu ini aman',
-      footer: `${myTasks.length} agenda bulan ini`,
+      footer: `${tasks.length} agenda bulan ini`,
     },
     {
       to: '/partner',
       icon: Users,
       label: 'Partner',
-      metric: `${connectedPartners.length} terhubung`,
-      detail: `${pendingPartners.length} perlu ditindak`,
+      metric: `${connectedPartnerCount} terhubung`,
+      detail: `${pendingPartnerCount} perlu ditindak`,
       footer: `${focusedProjectPeople.length} partner di project fokus`,
     },
   ]
+
+  if (loading) {
+    return (
+      <AppLayout active="Dashboard">
+        <div className="flex min-h-[400px] items-center justify-center">
+          <p className="text-sm font-bold text-slate-500">Loading...</p>
+        </div>
+      </AppLayout>
+    )
+  }
 
   return (
     <AppLayout active="Dashboard">
@@ -186,7 +245,7 @@ export default function Dashboard() {
               Dashboard
             </p>
             <h1 className="mt-2 text-2xl font-black md:text-3xl">
-              Selamat pagi, {currentUser.name}
+              {getGreeting()}, {user?.name}
             </h1>
             <p className="mt-2 text-sm font-semibold text-white/75">{todayLabel}</p>
 
@@ -378,7 +437,7 @@ export default function Dashboard() {
                 Selesai
               </p>
               <p className="mt-2 text-2xl font-black text-brand-navy">
-                {myTasks.filter((task) => task.status === 'selesai').length}
+                {tasks.filter((task) => task.status === 'selesai').length}
               </p>
             </div>
           </div>

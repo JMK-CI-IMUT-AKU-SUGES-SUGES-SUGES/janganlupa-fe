@@ -1,12 +1,17 @@
-import { useCallback, useMemo, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
+import toast from 'react-hot-toast'
+import { useAuth } from '../context/AuthContext'
 import { Plus, Search, X } from 'lucide-react'
 import AppLayout from '../layouts/AppLayout'
 import FilterDropdown from '../components/FilterDropdown'
 import TaskBoard from '../components/TaskBoard'
-import TaskDrawer from '../components/TaskDrawer'
-import useWorkspace from '../hooks/useWorkspace'
 import { createTaskDraft } from '../lib/taskBoard'
+import api from '../lib/api'
+import { taskSchema, formatZodErrors } from '../lib/validation'
+import { normalizeTask } from '../lib/projectUtils'
+
+const TaskDrawer = lazy(() => import('../components/TaskDrawer'))
 
 const taskCategoryOptions = [
   { value: 'personal', label: 'Task pribadi' },
@@ -14,95 +19,116 @@ const taskCategoryOptions = [
 ]
 
 const priorityOptions = [
-  { value: 'Tinggi', label: 'Prioritas tinggi' },
-  { value: 'Sedang', label: 'Prioritas sedang' },
-  { value: 'Rendah', label: 'Prioritas rendah' },
+  { value: 'tinggi', label: 'Prioritas tinggi' },
+  { value: 'sedang', label: 'Prioritas sedang' },
+  { value: 'rendah', label: 'Prioritas rendah' },
 ]
 
 const allScopeValues = taskCategoryOptions.map((option) => option.value)
 const allPriorityValues = priorityOptions.map((option) => option.value)
 
 export default function TaskList() {
-  const {
-    createTask,
-    currentUser,
-    deleteTask,
-    moveTask,
-    projects,
-    tasks,
-    updateTask,
-  } = useWorkspace()
+  const { user } = useAuth()
   const location = useLocation()
+  
   const shouldOpenCreate = Boolean(location.state?.openCreateTask)
+  
+  const [tasks, setTasks] = useState([])
+  const [projects, setProjects] = useState([])
+  const [loading, setLoading] = useState(true)
+
   const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  
   const [selectedScopes, setSelectedScopes] = useState(allScopeValues)
   const [selectedPriorities, setSelectedPriorities] = useState(allPriorityValues)
+  
   const [drawerOpen, setDrawerOpen] = useState(shouldOpenCreate)
   const [drawerMode, setDrawerMode] = useState(shouldOpenCreate ? 'create' : 'edit')
   const [activeTaskId, setActiveTaskId] = useState(null)
   const [createStatus, setCreateStatus] = useState('belum')
 
-  const normalizedSearchQuery = searchQuery.trim().toLowerCase()
+  const fetchTasks = useCallback(async (search = '') => {
+    try {
+      setLoading(true)
+      const res = await api.get('/tasks', { params: { search } })
+      
+      const normalizedTasks = res.data.data.tasks.map((task) =>
+        normalizeTask(task, user.name)
+      )
 
-  const myTasks = useMemo(
-    () => tasks.filter((task) => task.assignee === currentUser.name),
-    [currentUser.name, tasks]
-  )
+      setTasks(normalizedTasks)
+    } catch {
+      toast.error('Gagal memuat tugas')
+    } finally {
+      setLoading(false)
+    }
+  }, [user.name])
+
+  const fetchProjects = useCallback(async () => {
+    try {
+      const res = await api.get('/projects')
+      setProjects(res.data.data.projects || [])
+    } catch (error) {
+      console.error('Failed to fetch projects', error)
+    }
+  }, [])
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(searchQuery)
+    }, 500)
+    return () => clearTimeout(handler)
+  }, [searchQuery])
+
+  useEffect(() => {
+    fetchTasks(debouncedSearch)
+  }, [debouncedSearch, fetchTasks])
+
+  useEffect(() => {
+    fetchProjects()
+  }, [fetchProjects])
 
   const personalTasksCount = useMemo(
-    () => myTasks.filter((task) => task.scope === 'personal').length,
-    [myTasks]
+    () => tasks.filter((task) => task.scope === 'personal').length,
+    [tasks]
   )
 
   const projectTasksCount = useMemo(
-    () => myTasks.filter((task) => task.scope === 'project').length,
-    [myTasks]
+    () => tasks.filter((task) => task.scope === 'project').length,
+    [tasks]
   )
 
   const doneTasksCount = useMemo(
-    () => myTasks.filter((task) => task.status === 'selesai').length,
-    [myTasks]
+    () => tasks.filter((task) => task.status === 'selesai').length,
+    [tasks]
   )
 
   const filteredTasks = useMemo(
     () =>
-      myTasks.filter((task) => {
-        const searchableText = [
-          task.title,
-          task.description,
-          task.projectName,
-          task.assignee,
-          task.label,
-        ]
-          .join(' ')
-          .toLowerCase()
-
-        const matchesSearch = searchableText.includes(normalizedSearchQuery)
+      tasks.filter((task) => {
         const matchesScope = selectedScopes.includes(task.scope)
-        const matchesPriority = selectedPriorities.includes(task.priority)
-
-        return matchesSearch && matchesScope && matchesPriority
+        const priorityVal = task.priority?.toLowerCase() || 'sedang'
+        const matchesPriority = selectedPriorities.includes(priorityVal)
+        return matchesScope && matchesPriority
       }),
-    [myTasks, normalizedSearchQuery, selectedPriorities, selectedScopes]
+    [tasks, selectedPriorities, selectedScopes]
   )
 
   const hasActiveFilters =
-    normalizedSearchQuery.length > 0 ||
+    searchQuery.length > 0 ||
     selectedScopes.length !== taskCategoryOptions.length ||
     selectedPriorities.length !== priorityOptions.length
 
-  const activeTask = useMemo(
-    () =>
-      drawerMode === 'edit'
-        ? tasks.find((task) => task.id === activeTaskId) ?? null
-        : createTaskDraft({
-            assignee: currentUser.name,
-            status: createStatus,
-            dueDate: new Date().toISOString().slice(0, 10),
-            scope: 'personal',
-          }),
-    [activeTaskId, createStatus, currentUser.name, drawerMode, tasks]
-  )
+  const activeTask = useMemo(() => {
+    if (drawerMode === 'edit') {
+      return tasks.find((task) => task.id === activeTaskId) ?? null
+    }
+    return createTaskDraft({
+      assignee: user.name,
+      status: createStatus,
+    })
+  }, [activeTaskId, createStatus, drawerMode, tasks, user.name])
 
   const toggleOption = useCallback((value, setter) => {
     setter((current) =>
@@ -134,24 +160,68 @@ export default function TaskList() {
     setDrawerOpen(false)
   }, [])
 
-  const saveTask = useCallback((task) => {
-    if (drawerMode === 'create') {
-      createTask({
-        ...task,
-        assignee: currentUser.name,
-        scope: 'personal',
-        projectId: '',
-        projectName: '',
-      })
-    } else {
-      updateTask({
-        ...task,
-        assignee: currentUser.name,
-      })
+  const saveTask = async (taskData) => {
+    const result = taskSchema.safeParse(taskData)
+    if (!result.success) {
+      toast.error(formatZodErrors(result.error))
+      return
     }
 
-    setDrawerOpen(false)
-  }, [createTask, currentUser.name, drawerMode, updateTask])
+    try {
+      const payload = {
+        title: taskData.title,
+        description: taskData.description,
+        status: taskData.status,
+        priority: taskData.priority?.toLowerCase(),
+        due_date: taskData.dueDate || null,
+        project_id: taskData.scope === 'project' ? taskData.projectId : null,
+        links: taskData.links || []
+      }
+
+      if (drawerMode === 'create') {
+        await api.post('/tasks', payload)
+      } else {
+        await api.put(`/tasks/${taskData.id}`, payload)
+      }
+      toast.success(drawerMode === 'create' ? 'Task berhasil dibuat' : 'Task berhasil diperbarui')
+      fetchTasks(debouncedSearch)
+      setDrawerOpen(false)
+    } catch (err) {
+      toast.error(err.response?.data?.meta?.message || 'Gagal menyimpan task')
+    }
+  }
+
+  const deleteTask = async (taskId) => {
+    if (!taskId) {
+      toast.error('ID task tidak ditemukan')
+      return
+    }
+
+    try {
+      await api.delete(`/tasks/${taskId}`)
+      toast.success('Task berhasil dihapus')
+      fetchTasks(debouncedSearch)
+      setDrawerOpen(false)
+    } catch (err) {
+      toast.error(err.response?.data?.meta?.message || 'Gagal menghapus task')
+    }
+  }
+
+  const moveTask = async (taskId, status) => {
+    if (!taskId || !status) {
+      toast.error('Data status tidak valid')
+      return
+    }
+
+    setTasks(current => current.map(t => t.id === taskId ? { ...t, status } : t))
+    try {
+      await api.patch(`/tasks/${taskId}/status`, { status })
+      toast.success('Status task berhasil diubah')
+    } catch (err) {
+      toast.error(err.response?.data?.meta?.message || 'Gagal mengupdate status')
+      fetchTasks(debouncedSearch)
+    }
+  }
 
   return (
     <AppLayout active="My Task">
@@ -163,7 +233,7 @@ export default function TaskList() {
           <h1 className="mt-2 text-3xl font-black text-brand-navy md:text-4xl">
             Kelola tugasmu
           </h1>
-          <p className="mt-2 text-sm font-medium text-slate-500">{currentUser.name}</p>
+          <p className="mt-2 text-sm font-medium text-slate-500">{user?.name}</p>
         </div>
 
         <button
@@ -213,9 +283,15 @@ export default function TaskList() {
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">
-            {filteredTasks.length} dari {myTasks.length} task tampil
-          </span>
+          {loading ? (
+            <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">
+              Loading...
+            </span>
+          ) : (
+            <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">
+              {filteredTasks.length} dari {tasks.length} task tampil
+            </span>
+          )}
           <span className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-brand">
             {personalTasksCount} task pribadi
           </span>
@@ -252,25 +328,29 @@ export default function TaskList() {
         showColumnAddButton={false}
       />
 
-      <TaskDrawer
-        key={`${drawerMode}-${activeTask?.id ?? createStatus}-${drawerOpen ? 'open' : 'closed'}`}
-        open={drawerOpen}
-        mode={drawerMode}
-        task={activeTask}
-        onClose={closeDrawer}
-        onSave={saveTask}
-        onDelete={deleteTask}
-        projects={projects}
-        scopeMode={
-          drawerMode === 'create'
-            ? 'personalOnly'
-            : activeTask?.scope === 'project'
-              ? 'projectOnly'
-              : 'personalOnly'
-        }
-        lockAssignee
-        lockedProjectId={activeTask?.projectId ?? ''}
-      />
+      {drawerOpen ? (
+        <Suspense fallback={null}>
+          <TaskDrawer
+            key={`${drawerMode}-${activeTask?.id ?? createStatus}-${drawerOpen ? 'open' : 'closed'}`}
+            open={drawerOpen}
+            mode={drawerMode}
+            task={activeTask}
+            onClose={closeDrawer}
+            onSave={saveTask}
+            onDelete={deleteTask}
+            projects={projects}
+            scopeMode={
+              drawerMode === 'create'
+                ? 'personalOnly'
+                : activeTask?.scope === 'project'
+                  ? 'projectOnly'
+                  : 'personalOnly'
+            }
+            lockAssignee
+            lockedProjectId={activeTask?.projectId ?? ''}
+          />
+        </Suspense>
+      ) : null}
     </AppLayout>
   )
 }
