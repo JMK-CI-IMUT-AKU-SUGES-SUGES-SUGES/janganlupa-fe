@@ -14,6 +14,7 @@ import {
   taskStatusOptions,
 } from '../lib/taskBoard'
 import { taskSchema, formatZodErrors } from '../lib/validation'
+import { useTasks, useProjects, useInvalidate } from '../lib/queries'
 
 const TaskDrawer = lazy(() => import('../components/TaskDrawer'))
 
@@ -78,12 +79,23 @@ function getNextUpcomingTasks(tasks, selectedDate) {
 export default function Calendar() {
   const location = useLocation()
   const { user } = useAuth()
+  const invalidate = useInvalidate()
   const todayKey = toDateKey(new Date())
   const initialSelectedDate = location.state?.selectedDate ?? todayKey
 
-  const [tasks, setTasks] = useState([])
-  const [projects, setProjects] = useState([])
-  const [loading, setLoading] = useState(true)
+  const tasksQuery = useTasks()
+  const projectsQuery = useProjects()
+
+  const tasks = useMemo(() => {
+    return (tasksQuery.data?.tasks || []).map((t) => normalizeTask(t, user?.name))
+  }, [tasksQuery.data, user?.name])
+
+  const projects = useMemo(() => {
+    return (projectsQuery.data?.projects || []).map((p) => normalizeProject(p))
+  }, [projectsQuery.data])
+
+  const loading = tasksQuery.isLoading
+
   const [viewDate, setViewDate] = useState(parseDateKey(initialSelectedDate))
   const [selectedDate, setSelectedDate] = useState(initialSelectedDate)
   const [scopeFilter, setScopeFilter] = useState('all')
@@ -94,34 +106,6 @@ export default function Calendar() {
 
   const year = viewDate.getFullYear()
   const month = viewDate.getMonth()
-
-  const fetchData = useCallback(async () => {
-    try {
-      setLoading(true)
-      const [tasksRes, projectsRes] = await Promise.all([
-        api.get('/tasks'),
-        api.get('/projects'),
-      ])
-
-      const normalizedTasks = (tasksRes.data.data.tasks || []).map((t) =>
-        normalizeTask(t, user.name)
-      )
-      const normalizedProjects = (projectsRes.data.data.projects || []).map((p) =>
-        normalizeProject(p)
-      )
-
-      setTasks(normalizedTasks)
-      setProjects(normalizedProjects)
-    } catch (error) {
-      console.error('Failed to fetch data:', error)
-    } finally {
-      setLoading(false)
-    }
-  }, [user.name])
-
-  useEffect(() => {
-    fetchData()
-  }, [fetchData])
 
   const filteredTasks = useMemo(
     () =>
@@ -231,7 +215,7 @@ export default function Calendar() {
     try {
       const payload = denormalizeTask(taskData)
       await api.put(`/tasks/${taskData.id}`, payload)
-      fetchData()
+      invalidate('tasks')
       setDrawerOpen(false)
     } catch (err) {
       setError(err.response?.data?.meta?.message || 'Gagal menyimpan task')
@@ -248,7 +232,7 @@ export default function Calendar() {
 
     try {
       await api.delete(`/tasks/${taskId}`)
-      fetchData()
+      invalidate('tasks')
       setDrawerOpen(false)
     } catch (err) {
       setError(err.response?.data?.meta?.message || 'Gagal menghapus task')

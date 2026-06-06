@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ArrowRight,
@@ -11,9 +11,9 @@ import {
 } from 'lucide-react'
 import AppLayout from '../layouts/AppLayout'
 import { useAuth } from '../context/AuthContext'
-import api from '../lib/api'
 import { normalizeTask, normalizeProject, getProjectPeople, getProjectTaskStats } from '../lib/projectUtils'
 import { formatTaskDate } from '../lib/taskBoard'
+import { useTasks, useProjects, usePartners, usePartnerRequests } from '../lib/queries'
 
 const weekDays = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab']
 
@@ -87,47 +87,28 @@ function getGreeting() {
 export default function Dashboard() {
   const { user } = useAuth()
 
-  const [tasks, setTasks] = useState([])
-  const [projects, setProjects] = useState([])
-  const [connectedPartnerCount, setConnectedPartnerCount] = useState(0)
-  const [pendingPartnerCount, setPendingPartnerCount] = useState(0)
-  const [loading, setLoading] = useState(true)
+  const tasksRaw = useTasks()
+  const projectsRaw = useProjects()
+  const partnersRaw = usePartners()
+  const requestsRaw = usePartnerRequests()
 
-  const fetchDashboard = useCallback(async () => {
-    try {
-      setLoading(true)
+  const loading = tasksRaw.isLoading || projectsRaw.isLoading || partnersRaw.isLoading || requestsRaw.isLoading
 
-      const [tasksRes, projectsRes, partnersRes, requestsRes] = await Promise.all([
-        api.get('/tasks'),
-        api.get('/projects'),
-        api.get('/partners'),
-        api.get('/partners/requests'),
-      ])
+  const tasks = useMemo(() => {
+    return (tasksRaw.data?.tasks || []).map((t) => normalizeTask(t, user?.name))
+  }, [tasksRaw.data, user?.name])
 
-      const normalizedTasks = (tasksRes.data.data.tasks || []).map((t) =>
-        normalizeTask(t, user.name)
-      )
-      const normalizedProjects = (projectsRes.data.data.projects || []).map((p) =>
-        normalizeProject(p)
-      )
+  const projects = useMemo(() => {
+    return (projectsRaw.data?.projects || []).map((p) => normalizeProject(p))
+  }, [projectsRaw.data])
 
-      setTasks(normalizedTasks)
-      setProjects(normalizedProjects)
-      setConnectedPartnerCount(partnersRes.data.data.partners?.length || 0)
+  const connectedPartnerCount = partnersRaw.data?.partners?.length || 0
 
-      const incoming = requestsRes.data.data.incoming || []
-      const outgoing = requestsRes.data.data.outgoing || []
-      setPendingPartnerCount(incoming.length + outgoing.length)
-    } catch (error) {
-      console.error('Failed to fetch dashboard data:', error)
-    } finally {
-      setLoading(false)
-    }
-  }, [user.name])
-
-  useEffect(() => {
-    fetchDashboard()
-  }, [fetchDashboard])
+  const pendingPartnerCount = useMemo(() => {
+    const incoming = requestsRaw.data?.incoming || []
+    const outgoing = requestsRaw.data?.outgoing || []
+    return incoming.length + outgoing.length
+  }, [requestsRaw.data])
 
   const today = new Date()
   const todayKey = toDateKey(today)

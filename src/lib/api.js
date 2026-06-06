@@ -1,6 +1,5 @@
 import axios from 'axios';
 
-// Gunakan environment variable jika ada, atau fallback ke localhost
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 const api = axios.create({
@@ -28,9 +27,7 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && error.response.status === 401) {
-      // Token expired atau invalid
       localStorage.removeItem('token');
-      // Redirect ke halaman login jika bukan di halaman auth
       if (window.location.pathname !== '/login' && window.location.pathname !== '/register') {
         window.location.href = '/login';
       }

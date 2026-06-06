@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext'
 import api from '../lib/api'
 import { getInitials } from '../lib/projectUtils'
 import { partnerSlugSchema, formatZodErrors } from '../lib/validation'
+import { usePartners, usePartnerRequests, useProjects, useInvalidate } from '../lib/queries'
 
 const PartnerProfileModal = lazy(() => import('../components/PartnerProfileModal'))
 
@@ -83,6 +84,7 @@ function PartnerRow({ partner, accent = 'emerald', extraLabel, onOpen }) {
 
 export default function Partner() {
   const { user } = useAuth()
+  const invalidate = useInvalidate()
   const [slugInput, setSlugInput] = useState('')
   const [activePartnerId, setActivePartnerId] = useState(null)
   const [activeRelationId, setActiveRelationId] = useState(null)
@@ -91,57 +93,54 @@ export default function Partner() {
   const [incoming, setIncoming] = useState([])
   const [outgoing, setOutgoing] = useState([])
   const [projects, setProjects] = useState([])
-  const [loading, setLoading] = useState(false)
 
-  const normalizedSlug = normalizeSlugInput(slugInput)
+  const partnersQuery = usePartners()
+  const requestsQuery = usePartnerRequests()
+  const projectsQuery = useProjects()
 
-  const fetchData = useCallback(async () => {
-    try {
-      setLoading(true)
-      const [partnersRes, requestsRes, projectsRes] = await Promise.all([
-        api.get('/partners'),
-        api.get('/partners/requests'),
-        api.get('/projects')
-      ])
-
-      const connected = partnersRes.data.data.partners.map(p => ({
+  useEffect(() => {
+    if (partnersQuery.data) {
+      const connected = (partnersQuery.data.partners || []).map(p => ({
         ...p,
         relationId: p.relation_id,
         direction: 'connected',
         status: 'Terhubung',
         note: 'Partner aktif'
       }))
+      setPartners(connected)
+    }
+  }, [partnersQuery.data])
 
-      const inc = requestsRes.data.data.incoming.map(r => ({
+  useEffect(() => {
+    if (requestsQuery.data) {
+      const inc = (requestsQuery.data.incoming || []).map(r => ({
         ...r.requester,
         direction: 'incoming',
         status: 'Perlu ditinjau',
         note: r.note || 'Ingin terhubung',
         relationId: r.id
       }))
-
-      const out = requestsRes.data.data.outgoing.map(r => ({
+      const out = (requestsQuery.data.outgoing || []).map(r => ({
         ...r.receiver,
         direction: 'outgoing',
         status: 'Menunggu',
         note: r.note || 'Menunggu konfirmasi',
         relationId: r.id
       }))
-
-      setPartners(connected)
       setIncoming(inc)
       setOutgoing(out)
-      setProjects(projectsRes.data.data.projects)
-    } catch (error) {
-      console.error('Error fetching partner data:', error)
-    } finally {
-      setLoading(false)
     }
-  }, [])
+  }, [requestsQuery.data])
 
   useEffect(() => {
-    fetchData()
-  }, [fetchData])
+    if (projectsQuery.data) {
+      setProjects(projectsQuery.data.projects || [])
+    }
+  }, [projectsQuery.data])
+
+  const loading = partnersQuery.isLoading || requestsQuery.isLoading || projectsQuery.isLoading
+
+  const normalizedSlug = normalizeSlugInput(slugInput)
 
   const enrichedConnected = useMemo(() => {
     return partners.map(p => {
@@ -182,7 +181,7 @@ export default function Partner() {
       })
       toast.success('Permintaan partner terkirim')
       setSlugInput('')
-      fetchData()
+      invalidate('partners', 'partner-requests')
     } catch (error) {
       toast.error(error.response?.data?.meta?.message || 'Gagal mengirim request')
     } finally {
@@ -211,8 +210,8 @@ export default function Partner() {
         const relId = activeRelationId
         if (relId) {
            await api.delete(`/partners/${relId}`)
-           toast.success('Partner berhasil dihapus')
-           fetchData()
+      toast.success('Partner berhasil dihapus')
+      invalidate('partners', 'partner-requests', 'projects')
         } else {
            toast.error("Maaf, API saat ini memerlukan ID Relasi untuk menghapus partner aktif. (Akan diperbaiki di backend)")
         }
@@ -221,7 +220,7 @@ export default function Partner() {
         toast.error(err.response?.data?.meta?.message || 'Gagal menghapus partner')
       }
     },
-    [activeRelationId, closePartnerModal, fetchData]
+    [activeRelationId, closePartnerModal, invalidate]
   )
 
   const handleAcceptPartner = useCallback(
@@ -235,14 +234,14 @@ export default function Partner() {
         if (activeRelationId) {
           await api.put(`/partners/requests/${activeRelationId}`, { status: 'accepted' })
           toast.success('Permintaan partner diterima')
-          fetchData()
+          invalidate('partners', 'partner-requests')
         }
         closePartnerModal()
       } catch (err) {
         toast.error(err.response?.data?.meta?.message || 'Gagal menerima partner')
       }
     },
-    [activeRelationId, closePartnerModal, fetchData]
+    [activeRelationId, closePartnerModal, invalidate]
   )
 
   return (

@@ -30,6 +30,7 @@ import {
 } from '../lib/projectUtils'
 import { taskStatusOptions } from '../lib/taskBoard'
 import { taskSchema, projectSchema, inviteMemberSchema, formatZodErrors } from '../lib/validation'
+import { useProject, useInvalidate } from '../lib/queries'
 
 const TaskDrawer = lazy(() => import('../components/TaskDrawer'))
 const ProjectEditorDrawer = lazy(() => import('../components/ProjectEditorDrawer'))
@@ -53,10 +54,19 @@ function formatCompactDate(dateValue) {
 export default function ProjectDetail() {
   const { projectId } = useParams()
   const { user } = useAuth()
+  const invalidate = useInvalidate()
 
-  const [project, setProject] = useState(null)
-  const [tasks, setTasks] = useState([])
-  const [loading, setLoading] = useState(true)
+  const projectQuery = useProject(projectId)
+
+  const loading = projectQuery.isLoading
+  const project = useMemo(() => {
+    return projectQuery.data ? normalizeProject(projectQuery.data) : null
+  }, [projectQuery.data])
+
+  const tasks = useMemo(() => {
+    return (projectQuery.data?.tasks || []).map((t) => normalizeTask(t, user?.name))
+  }, [projectQuery.data?.tasks, user?.name])
+
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedAssignee, setSelectedAssignee] = useState('all')
   const [selectedStatus, setSelectedStatus] = useState('all')
@@ -70,31 +80,6 @@ export default function ProjectDetail() {
   const [inviteRole, setInviteRole] = useState('member')
   const [error, setError] = useState('')
   const [inviteError, setInviteError] = useState('')
-
-  const fetchProject = useCallback(async () => {
-    try {
-      setLoading(true)
-      const res = await api.get(`/projects/${projectId}`)
-      const apiProject = res.data.data.project
-      const normalized = normalizeProject(apiProject)
-
-      setProject(normalized)
-
-      const normalizedTasks = (apiProject.tasks || []).map((t) =>
-        normalizeTask(t, user.name)
-      )
-      setTasks(normalizedTasks)
-    } catch (error) {
-      console.error('Failed to fetch project:', error)
-      setProject(null)
-    } finally {
-      setLoading(false)
-    }
-  }, [projectId, user.name])
-
-  useEffect(() => {
-    fetchProject()
-  }, [fetchProject])
 
   const role = project ? getProjectRole(project, user.name) : 'member'
   const roleMeta = projectRoleMeta[role]
@@ -196,7 +181,7 @@ export default function ProjectDetail() {
         await api.put(`/tasks/${taskData.id}`, payload)
       }
 
-      fetchProject()
+      invalidate(['project', projectId], 'tasks')
       setDrawerOpen(false)
     } catch (err) {
       setError(err.response?.data?.meta?.message || 'Gagal menyimpan task')
@@ -213,7 +198,7 @@ export default function ProjectDetail() {
 
     try {
       await api.delete(`/tasks/${taskId}`)
-      fetchProject()
+      invalidate(['project', projectId], 'tasks')
       setDrawerOpen(false)
     } catch (err) {
       setError(err.response?.data?.meta?.message || 'Gagal menghapus task')

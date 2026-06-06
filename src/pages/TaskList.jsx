@@ -10,6 +10,7 @@ import { createTaskDraft } from '../lib/taskBoard'
 import api from '../lib/api'
 import { taskSchema, formatZodErrors } from '../lib/validation'
 import { normalizeTask } from '../lib/projectUtils'
+import { useTasks, useProjects, useInvalidate } from '../lib/queries'
 
 const TaskDrawer = lazy(() => import('../components/TaskDrawer'))
 
@@ -30,12 +31,29 @@ const allPriorityValues = priorityOptions.map((option) => option.value)
 export default function TaskList() {
   const { user } = useAuth()
   const location = useLocation()
+  const invalidate = useInvalidate()
   
   const shouldOpenCreate = Boolean(location.state?.openCreateTask)
   
   const [tasks, setTasks] = useState([])
   const [projects, setProjects] = useState([])
-  const [loading, setLoading] = useState(true)
+
+  const tasksQuery = useTasks()
+  const projectsQuery = useProjects()
+
+  const loading = tasksQuery.isLoading
+
+  useEffect(() => {
+    if (tasksQuery.data) {
+      setTasks((tasksQuery.data.tasks || []).map((t) => normalizeTask(t, user?.name)))
+    }
+  }, [tasksQuery.data, user?.name])
+
+  useEffect(() => {
+    if (projectsQuery.data) {
+      setProjects(projectsQuery.data.projects || [])
+    }
+  }, [projectsQuery.data])
 
   const [searchQuery, setSearchQuery] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -48,46 +66,12 @@ export default function TaskList() {
   const [activeTaskId, setActiveTaskId] = useState(null)
   const [createStatus, setCreateStatus] = useState('belum')
 
-  const fetchTasks = useCallback(async (search = '') => {
-    try {
-      setLoading(true)
-      const res = await api.get('/tasks', { params: { search } })
-      
-      const normalizedTasks = res.data.data.tasks.map((task) =>
-        normalizeTask(task, user.name)
-      )
-
-      setTasks(normalizedTasks)
-    } catch {
-      toast.error('Gagal memuat tugas')
-    } finally {
-      setLoading(false)
-    }
-  }, [user.name])
-
-  const fetchProjects = useCallback(async () => {
-    try {
-      const res = await api.get('/projects')
-      setProjects(res.data.data.projects || [])
-    } catch (error) {
-      console.error('Failed to fetch projects', error)
-    }
-  }, [])
-
   useEffect(() => {
     const handler = setTimeout(() => {
       setDebouncedSearch(searchQuery)
     }, 500)
     return () => clearTimeout(handler)
   }, [searchQuery])
-
-  useEffect(() => {
-    fetchTasks(debouncedSearch)
-  }, [debouncedSearch, fetchTasks])
-
-  useEffect(() => {
-    fetchProjects()
-  }, [fetchProjects])
 
   const personalTasksCount = useMemo(
     () => tasks.filter((task) => task.scope === 'personal').length,
@@ -184,7 +168,7 @@ export default function TaskList() {
         await api.put(`/tasks/${taskData.id}`, payload)
       }
       toast.success(drawerMode === 'create' ? 'Task berhasil dibuat' : 'Task berhasil diperbarui')
-      fetchTasks(debouncedSearch)
+      invalidate('tasks')
       setDrawerOpen(false)
     } catch (err) {
       toast.error(err.response?.data?.meta?.message || 'Gagal menyimpan task')
@@ -200,7 +184,7 @@ export default function TaskList() {
     try {
       await api.delete(`/tasks/${taskId}`)
       toast.success('Task berhasil dihapus')
-      fetchTasks(debouncedSearch)
+      invalidate('tasks')
       setDrawerOpen(false)
     } catch (err) {
       toast.error(err.response?.data?.meta?.message || 'Gagal menghapus task')
@@ -219,7 +203,7 @@ export default function TaskList() {
       toast.success('Status task berhasil diubah')
     } catch (err) {
       toast.error(err.response?.data?.meta?.message || 'Gagal mengupdate status')
-      fetchTasks(debouncedSearch)
+      invalidate('tasks')
     }
   }
 

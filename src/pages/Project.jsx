@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, lazy, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { ArrowRight, FolderOpen, Plus, Search, Users } from 'lucide-react'
@@ -14,6 +14,7 @@ import {
   projectRoleMeta,
 } from '../lib/projectUtils'
 import { projectSchema, formatZodErrors } from '../lib/validation'
+import { useProjects, useTasks } from '../lib/queries'
 
 const ProjectEditorDrawer = lazy(() => import('../components/ProjectEditorDrawer'))
 
@@ -44,50 +45,35 @@ export default function Project() {
   const navigate = useNavigate()
   const { user } = useAuth()
   
-  const [projects, setProjects] = useState([])
-  const [tasks, setTasks] = useState([])
-  const [loading, setLoading] = useState(true)
+  const projectsRaw = useProjects()
+  const tasksRaw = useTasks()
+
+  const loading = projectsRaw.isLoading
+
+  const projects = useMemo(() => {
+    const raw = projectsRaw.data?.projects || []
+    return raw.map(p => {
+      const users = p.users || []
+      return {
+        ...p,
+        owner: users.find(u => u.pivot.role === 'owner')?.name || '',
+        admins: users.filter(u => u.pivot.role === 'admin').map(u => u.name),
+        members: users.filter(u => u.pivot.role === 'member').map(u => u.name),
+      }
+    })
+  }, [projectsRaw.data])
+
+  const tasks = useMemo(() => {
+    return (tasksRaw.data?.tasks || []).map(t => ({
+      ...t,
+      scope: t.project_id ? 'project' : 'personal',
+      projectId: t.project_id || '',
+    }))
+  }, [tasksRaw.data])
 
   const [searchQuery, setSearchQuery] = useState('')
   const [roleFilter, setRoleFilter] = useState('all')
   const [drawerOpen, setDrawerOpen] = useState(false)
-
-  const fetchProjects = useCallback(async () => {
-    try {
-      setLoading(true)
-      const [projectsRes, tasksRes] = await Promise.all([
-        api.get('/projects'),
-        api.get('/tasks')
-      ])
-
-      const normalizedProjects = projectsRes.data.data.projects.map(p => {
-        const users = p.users || []
-        return {
-          ...p,
-          owner: users.find(u => u.pivot.role === 'owner')?.name || '',
-          admins: users.filter(u => u.pivot.role === 'admin').map(u => u.name),
-          members: users.filter(u => u.pivot.role === 'member').map(u => u.name),
-        }
-      })
-
-      const normalizedTasks = tasksRes.data.data.tasks.map(t => ({
-        ...t,
-        scope: t.project_id ? 'project' : 'personal',
-        projectId: t.project_id || '',
-      }))
-
-      setProjects(normalizedProjects)
-      setTasks(normalizedTasks)
-    } catch (error) {
-      console.error('Gagal mengambil data project:', error)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchProjects()
-  }, [fetchProjects])
 
   const filteredProjects = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase()

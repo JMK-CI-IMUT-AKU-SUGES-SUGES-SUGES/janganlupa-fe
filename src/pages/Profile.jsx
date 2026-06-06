@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AtSign,
   CheckCircle2,
@@ -15,6 +15,7 @@ import { useAuth } from '../context/AuthContext'
 import api from '../lib/api'
 import { getAvatarDataUri, getInitials } from '../lib/projectUtils'
 import { profileSchema, formatZodErrors } from '../lib/validation'
+import { useTasks, useProjects, usePartners } from '../lib/queries'
 
 function buildInitialForm(currentUser) {
   return {
@@ -102,35 +103,16 @@ export default function Profile() {
   const [partnerList, setPartnerList] = useState([])
   const [statsLoading, setStatsLoading] = useState(true)
 
-  useEffect(() => {
-    setForm(buildInitialForm(user))
-  }, [user])
+  const tasksQuery = useTasks()
+  const projectsQuery = useProjects()
+  const partnersQuery = usePartners()
 
-  useEffect(() => {
-    async function load() {
-      try {
-        setStatsLoading(true)
-        const [tasksRes, projectsRes, partnersRes] = await Promise.all([
-          api.get('/tasks'),
-          api.get('/projects'),
-          api.get('/partners'),
-        ])
-
-        const t = tasksRes.data?.data?.tasks || []
-        const p = projectsRes.data?.data?.projects || []
-        const partners = partnersRes.data?.data?.partners || []
-
-        setTaskCount(t.length)
-        setProjectCount(p.length)
-        setPartnerList(partners)
-      } catch (err) {
-        console.error('Profile API error:', err)
-      } finally {
-        setStatsLoading(false)
-      }
-    }
-    load()
-  }, [])
+  useMemo(() => {
+    if (tasksQuery.data) setTaskCount((tasksQuery.data.tasks || []).length)
+    if (projectsQuery.data) setProjectCount((projectsQuery.data.projects || []).length)
+    if (partnersQuery.data) setPartnerList(partnersQuery.data.partners || [])
+    if (tasksQuery.data || projectsQuery.data || partnersQuery.data) setStatsLoading(false)
+  }, [tasksQuery.data, projectsQuery.data, partnersQuery.data])
 
   const activeTasks = taskCount ?? 0
   const myTaskCount = taskCount ?? 0
